@@ -44,6 +44,6 @@ open -n build/MagerMotivate.app --args --data-dir /tmp/motivate-demo --fake-now 
 ## Процесс
 
 - Фичи идут через OpenSpec (`openspec/changes/<name>`: proposal, design, specs, tasks), команды `/opsx:propose`, `/opsx:apply`, `/opsx:archive`. Артефакты пишутся на русском.
-- `openspec/specs` пока пуст: новые capability описываются только через ADDED Requirements.
+- Основные спеки — в `openspec/specs/<capability>`. Изменение поведения существующей capability описывается через MODIFIED Requirements с полным текстом требования, новая capability — через ADDED.
 - Пункты tasks.md с ручной проверкой отмечаются выполненными только после подтверждения пользователя.
 - Сеть — только isdayoff.ru (календарь) и cbr-xml-daily.ru (курсы). Других запросов не добавлять без явного решения.
