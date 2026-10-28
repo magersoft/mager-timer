@@ -4,21 +4,21 @@
       "type": "swift",
       "request": "launch",
       "args": [],
-      "cwd": "${workspaceFolder:mager-motivate}",
-      "name": "Debug MagerMotivate",
-      "target": "MagerMotivate",
+      "cwd": "${workspaceFolder:mager-timer}",
+      "name": "Debug MagerTimer",
+      "target": "MagerTimer",
       "configuration": "debug",
-      "preLaunchTask": "swift: Build Debug MagerMotivate"
+      "preLaunchTask": "swift: Build Debug MagerTimer"
     },
     {
       "type": "swift",
       "request": "launch",
       "args": [],
-      "cwd": "${workspaceFolder:mager-motivate}",
-      "name": "Release MagerMotivate",
-      "target": "MagerMotivate",
+      "cwd": "${workspaceFolder:mager-timer}",
+      "name": "Release MagerTimer",
+      "target": "MagerTimer",
       "configuration": "release",
-      "preLaunchTask": "swift: Build Release MagerMotivate"
+      "preLaunchTask": "swift: Build Release MagerTimer"
     }
   ]
 }

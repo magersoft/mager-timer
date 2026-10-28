@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 let moscow: Calendar = {
   var c = Calendar(identifier: .gregorian)

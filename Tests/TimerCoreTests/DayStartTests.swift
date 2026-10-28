@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct DayStartTests {
   /// 07:00–15:00 with lunch at 11:00, as in the spec examples.

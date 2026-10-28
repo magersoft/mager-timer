@@ -1,4 +1,4 @@
-import MotivateCore
+import TimerCore
 import SwiftUI
 
 struct MenuContentView: View {
@@ -65,7 +65,7 @@ struct MenuContentView: View {
     VStack(alignment: .leading, spacing: 2) {
       ForEach(snapshot.warnings, id: \.self) { Text("⚠︎ \($0)") }
       if !model.notificationsAuthorized {
-        Text("⚠︎ Уведомления выключены: Системные настройки → Уведомления → MagerMotivate")
+        Text("⚠︎ Уведомления выключены: Системные настройки → Уведомления → MagerTimer")
       }
     }
     .font(.caption).foregroundStyle(.orange)
@@ -136,7 +136,7 @@ struct MenuContentView: View {
       Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
         .buttonStyle(.borderless)
         .keyboardShortcut("q")
-        .help("Выйти из MagerMotivate (⌘Q)")
+        .help("Выйти из MagerTimer (⌘Q)")
     }
     .font(.callout)
     .foregroundStyle(.secondary)

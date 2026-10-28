@@ -1,6 +1,6 @@
 import Foundation
 
-/// JSON files under one directory (by default `~/Library/Application Support/MagerMotivate`).
+/// JSON files under one directory (by default `~/Library/Application Support/MagerTimer`).
 public struct Storage: Sendable {
   public let root: URL
 
@@ -9,7 +9,21 @@ public struct Storage: Sendable {
   }
 
   public static var defaultRoot: URL {
+    URL.applicationSupportDirectory.appending(path: "MagerTimer", directoryHint: .isDirectory)
+  }
+
+  /// Where the app kept its data before it was renamed from MagerMotivate.
+  public static var legacyRoot: URL {
     URL.applicationSupportDirectory.appending(path: "MagerMotivate", directoryHint: .isDirectory)
+  }
+
+  /// Moves the whole folder once, so history and settings survive the rename. Does nothing if the new folder already exists.
+  public static func migrate(from legacy: URL, to root: URL) throws {
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: legacy.path(percentEncoded: false)),
+          !fm.fileExists(atPath: root.path(percentEncoded: false)) else { return }
+    try fm.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try fm.moveItem(at: legacy, to: root)
   }
 
   private var historyDir: URL { root.appending(path: "history", directoryHint: .isDirectory) }

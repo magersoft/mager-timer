@@ -4,12 +4,12 @@ import CoreAudio
 import CoreMediaIO
 import CoreGraphics
 import Foundation
-import MotivateCore
+import TimerCore
 import os
 import ServiceManagement
 import UserNotifications
 
-let log = Logger(subsystem: "com.magersoft.MagerMotivate", category: "app")
+let log = Logger(subsystem: "com.magersoft.MagerTimer", category: "app")
 
 /// True when running from a real `.app` bundle; notifications and login items need one.
 var isBundled: Bool { Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app" }

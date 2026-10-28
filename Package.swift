@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-  name: "MagerMotivate",
+  name: "MagerTimer",
   platforms: [.macOS(.v26)],
   products: [
-    .library(name: "MotivateCore", targets: ["MotivateCore"]),
-    .executable(name: "MagerMotivate", targets: ["MagerMotivate"]),
+    .library(name: "TimerCore", targets: ["TimerCore"]),
+    .executable(name: "MagerTimer", targets: ["MagerTimer"]),
   ],
   targets: [
-    .target(name: "MotivateCore"),
+    .target(name: "TimerCore"),
     .executableTarget(
-      name: "MagerMotivate",
-      dependencies: ["MotivateCore"],
+      name: "MagerTimer",
+      dependencies: ["TimerCore"],
       swiftSettings: [.defaultIsolation(MainActor.self)]
     ),
     .testTarget(
-      name: "MotivateCoreTests",
-      dependencies: ["MotivateCore"],
+      name: "TimerCoreTests",
+      dependencies: ["TimerCore"],
       resources: [.copy("Fixtures")]
     ),
   ]

@@ -1,4 +1,4 @@
-import MotivateCore
+import TimerCore
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
@@ -35,7 +35,7 @@ struct SettingsView: View {
 
   let model: AppModel
   @AppStorage(SettingsTab.storageKey) private var tab = SettingsTab.incomes.rawValue
-  @State private var draft = MotivateCore.Settings()
+  @State private var draft = TimerCore.Settings()
   @State private var error: String?
   @State private var loaded = false
 
@@ -158,7 +158,7 @@ private struct BreaksTab: View {
 }
 
 private struct IncomesTab: View {
-  @Binding var settings: MotivateCore.Settings
+  @Binding var settings: TimerCore.Settings
   let fx: FXRates?
 
   var body: some View {
@@ -392,7 +392,7 @@ private struct GoalsTab: View {
 }
 
 private struct GeneralTab: View {
-  @Binding var settings: MotivateCore.Settings
+  @Binding var settings: TimerCore.Settings
   let dataDirectory: URL
 
   var body: some View {

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct CalendarTests {
   @Test func `holidays, weekends and shortened days follow the 2026 production calendar`() throws {

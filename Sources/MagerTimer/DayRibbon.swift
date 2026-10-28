@@ -1,4 +1,4 @@
-import MotivateCore
+import TimerCore
 import SwiftUI
 
 /// The working day as one strip: an hour per segment, lunch tinted, a "now" marker,

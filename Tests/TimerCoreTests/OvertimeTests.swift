@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 /// Overtime scenarios use an 18:00 end, as in the spec.
 struct OvertimeTests {

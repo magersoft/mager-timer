@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import MotivateCore
+import TimerCore
 import Observation
 
 @Observable
@@ -41,7 +41,12 @@ final class AppModel {
       if let date = parser.date(from: fake) { offset = date.timeIntervalSinceNow }
     }
     clockOffset = offset
-    dataDirectory = value("--data-dir").map { URL(filePath: $0, directoryHint: .isDirectory) } ?? Storage.defaultRoot
+    if let dir = value("--data-dir") {
+      dataDirectory = URL(filePath: dir, directoryHint: .isDirectory)
+    } else {
+      dataDirectory = Storage.defaultRoot
+      do { try Storage.migrate(from: Storage.legacyRoot, to: dataDirectory) } catch { log.error("data migration failed: \(error)") }
+    }
     storage = Storage(root: dataDirectory)
 
     let now = Date().addingTimeInterval(offset)
@@ -195,7 +200,7 @@ final class AppModel {
   }
 
   /// Breaks a regular day brings under `settings`, for the settings form.
-  func plannedBreaks(with settings: MotivateCore.Settings) -> Int {
+  func plannedBreaks(with settings: TimerCore.Settings) -> Int {
     let engine = Engine(settings: settings, workCalendar: workCalendar, calendar: calendar)
     return engine.plannedBreaks(engine.plan(for: today, isShort: false))
   }

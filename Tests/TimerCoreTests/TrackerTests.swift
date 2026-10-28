@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct TrackerTests {
   /// Ticks every minute and collects events.

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct EarningsTests {
   @Test func `rate is the sum of incomes over the month norm`() throws {

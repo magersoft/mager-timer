@@ -1,4 +1,6 @@
-# MagerMotivate
+<p align="center"><img src="Resources/AppIcon.png" width="160" alt="Иконка MagerTimer"></p>
+
+<h1 align="center">MagerTimer</h1>
 
 Виджет в menubar macOS: показывает, сколько ты уже заработал за рабочий день, и честно говорит, когда дальше работаешь бесплатно.
 
@@ -17,9 +19,10 @@ macOS 26, Xcode 26 / Swift 6.2+.
 ## Команды
 
 ```bash
-swift test                       # тесты ядра расчётов (MotivateCore)
-./scripts/build-app.sh           # собрать build/MagerMotivate.app
-./scripts/build-app.sh --install # собрать, положить в ~/Applications и запустить
+swift test                       # тесты ядра расчётов (TimerCore)
+./scripts/build-app.sh           # собрать build/MagerTimer.app
+./scripts/build-app.sh --install # собрать, перенести в ~/Applications и запустить
+swift scripts/make-icon.swift Resources/AppIcon.png  # перерисовать иконку
 ```
 
 При первом запуске macOS спросит разрешение на уведомления. Автозапуск при входе включается сам (отключается в «Настройки → Общее»).
@@ -27,8 +30,8 @@ swift test                       # тесты ядра расчётов (Motivat
 ## Попробовать день, не дожидаясь вечера
 
 ```bash
-open -n build/MagerMotivate.app --args \
-  --data-dir /tmp/motivate-demo \
+open -n ~/Applications/MagerTimer.app --args \
+  --data-dir /tmp/timer-demo \
   --fake-now 2026-10-27T16:55
 ```
 
@@ -37,7 +40,7 @@ open -n build/MagerMotivate.app --args \
 
 ## Данные
 
-`~/Library/Application Support/MagerMotivate/`:
+`~/Library/Application Support/MagerTimer/` (до переименования — `MagerMotivate/`, при первом запуске папка переносится сама):
 
 - `settings.json` — настройки;
 - `history/YYYY-MM.json` — записи по дням (заработок, ставка, курс, переработка);
@@ -47,5 +50,5 @@ open -n build/MagerMotivate.app --args \
 
 ## Устройство
 
-- `Sources/MotivateCore` — чистая логика без UI: календарь, ставка, фазы дня, переработка, цель, снимок для меню, хранилище. Покрыта тестами (`Tests/MotivateCoreTests`).
-- `Sources/MagerMotivate` — SwiftUI-приложение: `MenuBarExtra`, окно настроек, уведомления, мониторинг активности, автозапуск.
+- `Sources/TimerCore` — чистая логика без UI: календарь, ставка, фазы дня, переработка, цель, снимок для меню, хранилище. Покрыта тестами (`Tests/TimerCoreTests`).
+- `Sources/MagerTimer` — SwiftUI-приложение: `MenuBarExtra`, окно настроек, уведомления, мониторинг активности, автозапуск.

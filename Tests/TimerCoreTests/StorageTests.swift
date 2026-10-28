@@ -1,9 +1,9 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct StorageTests {
-  let storage = Storage(root: URL.temporaryDirectory.appending(path: "motivate-tests-\(UUID().uuidString)"))
+  let storage = Storage(root: URL.temporaryDirectory.appending(path: "timer-tests-\(UUID().uuidString)"))
 
   @Test func `settings persist`() throws {
     #expect(try storage.loadSettings() == nil)
@@ -40,5 +40,27 @@ struct StorageTests {
     let stored = try storage.loadAllRecords()
     #expect(stored.map(\.date) == [day("2026-10-26"), day("2026-10-27"), day("2026-10-28")])
     #expect(stored.dropFirst().allSatisfy { $0.earnedRUB == 13_600 && $0.overtimeSeconds == 0 })
+  }
+
+  @Test func `data from the old folder moves to the new one once`() throws {
+    let base = URL.temporaryDirectory.appending(path: "timer-migrate-\(UUID().uuidString)")
+    let legacy = Storage(root: base.appending(path: "MagerMotivate"))
+    let settings = Settings(incomes: [october1700])
+    try legacy.save(settings)
+    let root = base.appending(path: "MagerTimer")
+    try Storage.migrate(from: legacy.root, to: root)
+    #expect(try Storage(root: root).loadSettings() == settings)
+    #expect(!FileManager.default.fileExists(atPath: legacy.root.path(percentEncoded: false)))
+  }
+
+  @Test func `migration leaves an existing new folder alone`() throws {
+    let base = URL.temporaryDirectory.appending(path: "timer-migrate-\(UUID().uuidString)")
+    let legacy = Storage(root: base.appending(path: "MagerMotivate"))
+    try legacy.save(Settings(incomes: [october1700]))
+    let current = Storage(root: base.appending(path: "MagerTimer"))
+    try current.save(Settings())
+    try Storage.migrate(from: legacy.root, to: current.root)
+    #expect(try current.loadSettings() == Settings())
+    #expect(try legacy.loadSettings() != nil)
   }
 }

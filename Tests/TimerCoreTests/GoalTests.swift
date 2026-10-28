@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct GoalTests {
   func goal(percent: Int = 100, amount: Double = 150_000, saved: Double = 0, created: String = "2026-10-01") -> Goal {

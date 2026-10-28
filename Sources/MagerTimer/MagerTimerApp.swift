@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MagerMotivateApp: App {
+struct MagerTimerApp: App {
   @State private var model = AppModel()
 
   var body: some Scene {
@@ -14,7 +14,7 @@ struct MagerMotivateApp: App {
     }
     .menuBarExtraStyle(.window)
 
-    Window("Настройки MagerMotivate", id: SettingsView.windowID) {
+    Window("Настройки MagerTimer", id: SettingsView.windowID) {
       SettingsView(model: model)
     }
     .windowResizability(.contentSize)

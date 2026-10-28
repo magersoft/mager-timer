@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct ModelsTests {
   func roundTrip<T: Codable & Equatable>(_ value: T) throws {

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MotivateCore
+@testable import TimerCore
 
 struct SnapshotTests {
   func snapshot(_ engine: Engine, date: String, ticks: [(String, TimeInterval?)], fx: FXRates? = nil,

@@ -1,5 +1,5 @@
 import AppKit
-import MotivateCore
+import TimerCore
 import SwiftUI
 
 /// Covers every screen, on every Space and over full-screen apps, while a break is on.
