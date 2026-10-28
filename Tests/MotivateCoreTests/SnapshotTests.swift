@@ -38,6 +38,34 @@ struct SnapshotTests {
     #expect(s.month.overtime == "Переработано: 2 ч ≈ 3 400 ₽ подарено")
   }
 
+  @Test(arguments: [
+    ("2026-10-27 08:30", "☕ •••"),
+    ("2026-10-27 11:00", "💰 •••"),
+    ("2026-10-27 13:30", "🍜 •••"),
+    ("2026-11-04 12:00", "🌴"),
+  ])
+  func `hidden amounts leave the phase icon and a mask`(moment: String, title: String) throws {
+    var engine = try makeEngine()
+    engine.settings.hidesAmounts = true
+    let s = snapshot(engine, date: String(moment.prefix(10)), ticks: [(moment, 1)])
+    #expect(s.title == title)
+  }
+
+  @Test func `hidden amounts mask overtime without the red, the menu keeps the numbers`() throws {
+    var engine = try makeEngine()
+    engine.settings.hidesAmounts = true
+    var ticks: [(String, TimeInterval?)] = []
+    for minute in stride(from: 0, through: 80, by: 5) {
+      ticks.append((String(format: "2026-10-27 %02d:%02d", 17 + minute / 60, minute % 60), 0))
+    }
+    let s = snapshot(engine, date: "2026-10-27", ticks: ticks)
+    #expect(s.title == "🔥 •••")
+    #expect(!s.isAlert)
+    #expect(s.today?.earned == "13 600 ₽")
+    engine.settings.hidesAmounts = false
+    #expect(snapshot(engine, date: "2026-10-27", ticks: ticks).title == "🔥 +1:20")
+  }
+
   @Test func `after finishing the title shows the day total`() throws {
     let s = snapshot(try makeEngine(), date: "2026-10-27", ticks: [("2026-10-27 17:00", 0), ("2026-10-27 17:20", nil)])
     #expect(s.title == "✓ 13 600 ₽")

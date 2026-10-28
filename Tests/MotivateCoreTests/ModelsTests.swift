@@ -14,7 +14,7 @@ struct ModelsTests {
     try roundTrip(Settings(
       incomes: [october1700, Income(name: "US", amount: 1000, currency: .usd, payouts: [Payout(day: 5, percent: 100)])], displayCurrency: .usd,
       schedule: Schedule(start: t(10, 0), end: t(18, 0), lunchStart: t(14, 0)),
-      vacations: [VacationRange(from: day("2026-11-10"), to: day("2026-11-24"))], goals: [goal], launchAtLogin: false))
+      vacations: [VacationRange(from: day("2026-11-10"), to: day("2026-11-24"))], goals: [goal], launchAtLogin: false, hidesAmounts: true))
     try roundTrip(DayRecord(
       date: day("2026-10-27"), earnedRUB: 13_600, rateRUB: 1700, fx: usdFX, normHours: 8, scheduleHours: 8,
       overtime: OvertimeState(mode: .manual, lastActivityAt: at("2026-10-27 18:10"), closedAt: at("2026-10-27 18:30"), finalOvertime: 1800),
@@ -27,6 +27,7 @@ struct ModelsTests {
     #expect(s.displayCurrency == .eur)
     #expect(s.schedule == Schedule())
     #expect(s.launchAtLogin)
+    #expect(!s.hidesAmounts)
   }
 
   @Test func `early records with a Bool day off still load`() throws {

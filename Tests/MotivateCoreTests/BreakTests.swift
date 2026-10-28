@@ -355,6 +355,18 @@ struct BreakTests {
     #expect(snapshot.breaks?.canStartNow == false)
   }
 
+  @Test func `with amounts hidden the break screen drops the money line`() throws {
+    var engine = try makeEngine(schedule: morning)
+    engine.settings.hidesAmounts = true
+    var tracker = tracker()
+    run(&tracker, engine, from: "2026-10-27 07:00", to: "2026-10-27 07:50")
+    tracker.today.breaks.skipped = 2
+    let screen = try #require(tracker.snapshot(now: at("2026-10-27 07:51"), engine: engine).breakScreen)
+    #expect(screen.earnings == nil)
+    #expect(screen.prompt == "Встань и отойди от компа на 10 мин")
+    #expect(screen.skipped == "Ты скипнул уже 2 перерыва из 5")
+  }
+
   @Test func `in overtime the break screen says the time is free anyway`() throws {
     let engine = try makeEngine(schedule: morning)
     var tracker = tracker()

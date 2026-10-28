@@ -109,7 +109,7 @@ struct BreakView: View {
     VStack(spacing: 8) {
       Text("Перерыв").font(.title.bold())
       Text(screen.prompt).font(.title3)
-      Text(screen.earnings).font(.title3).foregroundStyle(.green)
+      if let earnings = screen.earnings { Text(earnings).font(.title3).foregroundStyle(.green) }
     }
     .padding(.top, 8)
     Text(screen.skipped).font(.headline).foregroundStyle(.orange)

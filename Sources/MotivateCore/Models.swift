@@ -296,6 +296,8 @@ public struct Settings: Codable, Hashable, Sendable {
   public var goals: [Goal]
   public var launchAtLogin: Bool
   public var breaks: BreakSettings
+  /// Amounts are masked wherever they show up on their own: the menu bar, the break screen, notifications.
+  public var hidesAmounts: Bool
 
   public init(
     incomes: [Income] = [],
@@ -304,7 +306,8 @@ public struct Settings: Codable, Hashable, Sendable {
     vacations: [VacationRange] = [],
     goals: [Goal] = [],
     launchAtLogin: Bool = true,
-    breaks: BreakSettings = BreakSettings()
+    breaks: BreakSettings = BreakSettings(),
+    hidesAmounts: Bool = false
   ) {
     self.incomes = incomes
     self.displayCurrency = displayCurrency
@@ -313,6 +316,7 @@ public struct Settings: Codable, Hashable, Sendable {
     self.goals = goals
     self.launchAtLogin = launchAtLogin
     self.breaks = breaks
+    self.hidesAmounts = hidesAmounts
   }
 
   public func validate() throws(SettingsError) {
@@ -352,6 +356,7 @@ public struct Settings: Codable, Hashable, Sendable {
       ?? (try legacy.decodeIfPresent(Goal.self, forKey: .goal)).map { [$0] } ?? []
     launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
     breaks = try c.decodeIfPresent(BreakSettings.self, forKey: .breaks) ?? d.breaks
+    hidesAmounts = try c.decodeIfPresent(Bool.self, forKey: .hidesAmounts) ?? d.hidesAmounts
     // Shared paydays become equal shares of every income that has none of its own.
     let days = (try legacy.decodeIfPresent([Int].self, forKey: .paydays) ?? []).filter { (1...31).contains($0) }
     if !days.isEmpty {

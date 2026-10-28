@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import CoreAudio
 import CoreMediaIO
 import CoreGraphics
@@ -46,6 +47,32 @@ final class ActivityMonitor {
   func idleSeconds() -> TimeInterval? {
     guard !isLocked, !isAsleep else { return nil }
     return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+  }
+}
+
+/// ⌃⌥⌘M from any app. Carbon hot keys need no Accessibility permission, unlike a global key monitor.
+final class PrivacyHotKey {
+  private var hotKey: EventHotKeyRef?
+  private var handler: EventHandlerRef?
+  var onPress: (() -> Void)?
+
+  init() {
+    var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+    let installed = InstallEventHandler(
+      GetApplicationEventTarget(),
+      { _, _, context in
+        guard let context else { return noErr }
+        let hotKey = Unmanaged<PrivacyHotKey>.fromOpaque(context).takeUnretainedValue()
+        // Carbon delivers hot keys on the main thread.
+        MainActor.assumeIsolated { hotKey.onPress?() }
+        return noErr
+      }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+    let registered = RegisterEventHotKey(
+      UInt32(kVK_ANSI_M), UInt32(controlKey | optionKey | cmdKey), EventHotKeyID(signature: 0x4D4D_4F54, id: 1),
+      GetApplicationEventTarget(), 0, &hotKey)
+    if installed != noErr || registered != noErr {
+      log.error("Hot key ⌃⌥⌘M unavailable: \(installed, privacy: .public)/\(registered, privacy: .public)")
+    }
   }
 }
 

@@ -92,8 +92,8 @@ public struct DaySnapshot: Hashable, Sendable {
     public var fraction: Double
     /// `Встань и отойди от компа на 10 мин`
     public var prompt: String
-    /// `За перерыв капнет ≈ 816 ₽`, or a reminder that overtime is free.
-    public var earnings: String
+    /// `За перерыв капнет ≈ 816 ₽`, or a reminder that overtime is free; nil while amounts are hidden.
+    public var earnings: String?
     /// `Ты скипнул уже 2 перерыва из 5`
     public var skipped: String
     public var canSnooze: Bool
@@ -155,6 +155,11 @@ extension DayTracker {
       isAlert = true
     case .afterHours: title = "⏳ \(money(today.earnedRUB))"
     case .closed: title = "✓ \(money(today.earnedRUB))"
+    }
+    // Everything after the icon is a value: money, the start time or the overtime.
+    if engine.settings.hidesAmounts, let icon = title.split(separator: " ").first, icon != Substring(title) {
+      title = "\(icon) •••"
+      isAlert = false
     }
 
     var todaySection: DaySnapshot.Today?
@@ -275,7 +280,8 @@ extension DayTracker {
           remaining: String(format: "%02d:%02d", Int(left.rounded(.up)) / 60, Int(left.rounded(.up)) % 60),
           fraction: 1 - left / settings.length,
           prompt: "Встань и отойди от компа на \(settings.lengthMinutes) мин",
-          earnings: earned >= 1 ? "За перерыв капнет ≈ \(money(earned))" : "Ты и так работаешь бесплатно",
+          earnings: engine.settings.hidesAmounts ? nil
+            : earned >= 1 ? "За перерыв капнет ≈ \(money(earned))" : "Ты и так работаешь бесплатно",
           skipped: Self.skippedLine(state.skipped, of: planned),
           canSnooze: state.canSnooze)
       }

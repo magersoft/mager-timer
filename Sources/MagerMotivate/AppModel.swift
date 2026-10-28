@@ -19,6 +19,7 @@ final class AppModel {
   @ObservationIgnored private let clockOffset: TimeInterval
   @ObservationIgnored private let activity = ActivityMonitor()
   @ObservationIgnored private let notifier = Notifier()
+  @ObservationIgnored private let hotKey = PrivacyHotKey()
   @ObservationIgnored private var lastSavedPhase: DayPhase?
   @ObservationIgnored private var lastSave = Date.distantPast
   @ObservationIgnored private var lastFetch = Date.distantPast
@@ -77,6 +78,7 @@ final class AppModel {
 
   private func start() {
     activity.onWake = { [weak self] in self?.tick() }
+    hotKey.onPress = { [weak self] in self?.toggleHidesAmounts() }
     notifier.onAction = { [weak self] action in
       switch action {
       case Notifier.finishAction: self?.finish()
@@ -141,11 +143,14 @@ final class AppModel {
     let money = { (rub: Double) in
       MoneyFormatter.format(rub: rub, in: self.settings.displayCurrency, fx: self.fx) ?? MoneyFormatter.format(rub, .rub)
     }
+    let hides = settings.hidesAmounts
     switch event {
     case .dayStarted(let expected):
-      notifier.post(title: "Рабочий день начался", body: "Сегодня \(money(expected))")
+      notifier.post(title: "Рабочий день начался", body: hides ? "Хорошего дня" : "Сегодня \(money(expected))")
     case .dayEnded(let total):
-      notifier.post(title: "Рабочий день окончен · \(money(total))", body: "Дальше бесплатно", category: Notifier.endOfDayCategory)
+      notifier.post(
+        title: hides ? "Рабочий день окончен" : "Рабочий день окончен · \(money(total))", body: "Дальше бесплатно",
+        category: Notifier.endOfDayCategory)
     case .overtime(let hours):
       notifier.post(title: "🔥 Переработка \(hours) ч", body: "Ты работаешь бесплатно уже \(hours) ч. Пора закругляться")
     case .goalAchieved(let id, let name):
@@ -193,6 +198,12 @@ final class AppModel {
   func plannedBreaks(with settings: MotivateCore.Settings) -> Int {
     let engine = Engine(settings: settings, workCalendar: workCalendar, calendar: calendar)
     return engine.plannedBreaks(engine.plan(for: today, isShort: false))
+  }
+
+  func toggleHidesAmounts() {
+    var updated = settings
+    updated.hidesAmounts.toggle()
+    apply(updated)
   }
 
   func startDay() {

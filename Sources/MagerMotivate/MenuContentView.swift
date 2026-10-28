@@ -22,11 +22,18 @@ struct MenuContentView: View {
         } else if let label = snapshot.nonWorkingLabel {
           Text("🌴 \(label)").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
         }
-        Button { openSettings(.incomes) } label: {
-          Image(systemName: "gearshape").font(.body)
+        HStack(spacing: 8) {
+          Button { model.toggleHidesAmounts() } label: {
+            Image(systemName: model.settings.hidesAmounts ? "eye.slash" : "eye").font(.body)
+          }
+          .buttonStyle(.borderless)
+          .help(model.settings.hidesAmounts ? "Показать суммы в menubar (⌃⌥⌘M)" : "Скрыть суммы в menubar (⌃⌥⌘M)")
+          Button { openSettings(.incomes) } label: {
+            Image(systemName: "gearshape").font(.body)
+          }
+          .buttonStyle(.borderless)
+          .help("Настройки")
         }
-        .buttonStyle(.borderless)
-        .help("Настройки")
       }
       Divider()
       MonthSection(month: snapshot.month, payday: snapshot.payday)
