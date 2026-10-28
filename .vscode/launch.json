@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:mager-motivate}",
+      "name": "Debug MagerMotivate",
+      "target": "MagerMotivate",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug MagerMotivate"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:mager-motivate}",
+      "name": "Release MagerMotivate",
+      "target": "MagerMotivate",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release MagerMotivate"
+    }
+  ]
+}
