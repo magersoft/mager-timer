@@ -119,7 +119,7 @@ final class AppModel {
     let now = now
     let engine = engine
     save(tracker.rollOver(now: now, latestFX: latestFX, engine: engine))
-    let phase = engine.phase(at: now, status: tracker.status(engine: engine), overtime: tracker.today.overtime)
+    let phase = engine.phase(at: now, status: tracker.status(engine: engine, now: now), overtime: tracker.today.overtime)
     let breaksRunning = tracker.breaksRunning(phase: phase, engine: engine)
     let awaitsStart = tracker.awaitsStart(now: now, engine: engine)
     // Activity matters for starting a forgotten day, for overtime once the day is over,
@@ -218,7 +218,7 @@ final class AppModel {
   }
 
   func resetStart() {
-    tracker.resetStart(engine: engine)
+    tracker.resetStart(now: now, engine: engine)
     tick()
     saveToday(now: now)
   }
@@ -231,6 +231,30 @@ final class AppModel {
 
   func finish() {
     tracker.finish(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func pause() {
+    tracker.pause(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func resume() {
+    tracker.resume(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func finishEarly() {
+    tracker.finishEarly(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func resumeWork() {
+    tracker.resumeWork(now: now, engine: engine)
     tick()
     saveToday(now: now)
   }

@@ -9,6 +9,12 @@ public struct DaySnapshot: Hashable, Sendable {
     case finish
     case dayOff
     case undoDayOff
+    case pause
+    case resume
+    /// "Finish the day" before its end; `DaySnapshot.Today.finishPrompt` asks to confirm.
+    case finishEarly
+    /// "Back to work" on a closed day.
+    case resumeWork
   }
 
   public struct Hour: Hashable, Sendable {
@@ -22,6 +28,10 @@ public struct DaySnapshot: Hashable, Sendable {
     public var fraction: Double
     /// The slot is mostly lunch.
     public var isLunch: Bool
+    /// The slot is mostly paused.
+    public var isPaused: Bool
+    /// `пауза 14:00–15:00` for each pause that began in this slot.
+    public var pauses: [String]
   }
 
   public struct Today: Hashable, Sendable {
@@ -45,6 +55,10 @@ public struct DaySnapshot: Hashable, Sendable {
     /// Real rate after overtime, e.g. `1 360 ₽/ч (−20%)`.
     public var realRate: String?
     public var overtime: String?
+    /// `на паузе 0:42 · конец в 18:42` while the day is on pause.
+    public var pause: String?
+    /// `Недоработано 1 ч 5 мин. Закончить?` — what finishing the day now would leave.
+    public var finishPrompt: String?
   }
 
   public struct Month: Hashable, Sendable {
@@ -53,6 +67,10 @@ public struct DaySnapshot: Hashable, Sendable {
     public var expected: String
     public var fraction: Double
     public var overtime: String?
+    /// `Недоработано: 1 ч`
+    public var undertime: String?
+    /// `Баланс: +2 ч` — overtime less undertime.
+    public var balance: String?
   }
 
   public struct Payday: Hashable, Sendable {
@@ -123,7 +141,7 @@ extension DayTracker {
     let currency = engine.settings.displayCurrency
     let fx = today.fx
     let money: (Double) -> String = { MoneyFormatter.format(rub: $0, in: currency, fx: fx) ?? MoneyFormatter.format($0, .rub) }
-    let status = status(engine: engine)
+    let status = status(engine: engine, now: now)
     let phase = engine.phase(at: now, status: status, overtime: today.overtime)
     let rate = engine.rate(year: today.date.year, month: today.date.month, fx: fx)
 
@@ -150,6 +168,7 @@ extension DayTracker {
     case .beforeStart: title = "☕ \(engine.settings.schedule.start)"
     case .working: title = "💰 \(money(today.earnedRUB))"
     case .lunch: title = "🍜 \(money(today.earnedRUB))"
+    case .paused: title = "⏸ \(money(today.earnedRUB))"
     case .afterHours where overtime >= 60:
       title = "🔥 +\(DurationFormatter.hoursMinutes(overtime))"
       isAlert = true
@@ -174,13 +193,18 @@ extension DayTracker {
       let hours = plan.hourSlots(rate: rate.perHourRUB, at: now).map { slot in
         let length = slot.end.timeIntervalSince(slot.start)
         let lunch = min(slot.end, plan.lunchEnd).timeIntervalSince(max(slot.start, plan.lunchStart))
+        let paused = length - plan.activeTime(from: slot.start, to: slot.end)
+        let pauses = plan.pauses.filter { (slot.start..<slot.end).contains($0.start) }
+          .map { "пауза \(clock($0.start))–\(clock($0.end))" }
         return DaySnapshot.Hour(
           label: "\(clock(slot.start))–\(clock(slot.end))",
           startLabel: String(clock(slot.start).prefix(2)),
           amount: money(slot.earnedRUB),
           state: slot.state,
           fraction: length > 0 && plan.isStarted ? min(max(now.timeIntervalSince(slot.start) / length, 0), 1) : 0,
-          isLunch: length > 0 && lunch >= length / 2)
+          isLunch: length > 0 && lunch >= length / 2,
+          isPaused: length > 0 && paused >= length / 2,
+          pauses: pauses)
       }
       var realRate: String?
       if overtime >= 60, plan.scheduleHours > 0 {
@@ -195,15 +219,20 @@ extension DayTracker {
         earned: money(today.earnedRUB),
         dayPay: money(dayPay),
         fraction: dayPay > 0 ? today.earnedRUB / dayPay : 0,
-        remaining: plan.isStarted && now < plan.end && now >= plan.start ? DurationFormatter.hoursMinutes(plan.end.timeIntervalSince(now)) : nil,
+        remaining: [.working, .lunch].contains(phase) ? DurationFormatter.hoursMinutes(plan.end.timeIntervalSince(now)) : nil,
         hours: hours,
         endLabel: String(clock(plan.end).prefix(2)),
         endTime: clock(plan.end),
-        nowFraction: plan.isStarted && now >= plan.start && now < plan.end ? now.timeIntervalSince(plan.start) / plan.duration : nil,
+        nowFraction: plan.isStarted && now >= plan.start && now < plan.end && phase != .closed
+          ? now.timeIntervalSince(plan.start) / plan.end.timeIntervalSince(plan.start) : nil,
         overtimeHours: overtime / 3600,
         rate: "\(money(rate.perHourRUB))/ч",
         realRate: realRate,
-        overtime: overtime >= 60 ? DurationFormatter.human(overtime) : nil)
+        overtime: overtime >= 60 ? DurationFormatter.human(overtime) : nil,
+        pause: plan.pausedSince.map { "на паузе \(DurationFormatter.hoursMinutes(now.timeIntervalSince($0))) · конец в \(clock(plan.end))" },
+        // An open pause pushes the end along with now, so the norm left is end − now either way.
+        finishPrompt: [.working, .lunch, .paused].contains(phase)
+          ? "Недоработано \(DurationFormatter.human(plan.end.timeIntervalSince(now))). Закончить?" : nil)
     case .paidLeave(let plan, let reason):
       let label = reason == .vacation ? "Отпуск" : "Оплачиваемый выходной"
       nonWorkingLabel = "\(label) · \(money(today.earnedRUB)) из \(money(plan.dayPay(rate: rate.perHourRUB)))"
@@ -223,7 +252,9 @@ extension DayTracker {
       expected: money(summary.expectedRUB),
       fraction: summary.expectedRUB > 0 ? min(summary.earnedRUB / summary.expectedRUB, 1) : 0,
       overtime: summary.overtimeSeconds >= 60
-        ? "Переработано: \(DurationFormatter.human(summary.overtimeSeconds)) ≈ \(money(summary.giftedRUB)) подарено" : nil)
+        ? "Переработано: \(DurationFormatter.human(summary.overtimeSeconds)) ≈ \(money(summary.giftedRUB)) подарено" : nil,
+      undertime: summary.undertimeSeconds >= 60 ? "Недоработано: \(DurationFormatter.human(summary.undertimeSeconds))" : nil,
+      balance: Self.balanceLine(summary.overtimeSeconds - summary.undertimeSeconds))
 
     var goals: [DaySnapshot.Goal] = []
     for g in engine.settings.goals {
@@ -245,10 +276,14 @@ extension DayTracker {
       if today.startedAt == nil { actions.append(.startDay) }
       actions.append(.dayOff)
     case .working, .lunch:
-      actions += [.resetStart, .dayOff]
+      actions += [.pause, .finishEarly, .resetStart, .dayOff]
+    case .paused:
+      actions += [.resume, .finishEarly, .resetStart, .dayOff]
+    case .closed:
+      actions.append(.resumeWork)
     case .nonWorking(.unpaidDayOff), .paidLeave(.paidDayOff):
       actions.append(.undoDayOff)
-    case .nonWorking, .paidLeave, .closed:
+    case .nonWorking, .paidLeave:
       break
     }
 
@@ -302,7 +337,7 @@ extension DayTracker {
     let state = today.breaks
     if state.isActive { return "Перерыв" }
     if state.waitingForCall { return "Перерыв после звонка" }
-    guard let due = breakDue(engine: engine) else { return "" }
+    guard let due = breakDue(now: now, engine: engine) else { return "" }
     if engine.breakAllowed(at: due, plan: plan) {
       let minutes = Int((due.timeIntervalSince(now) / 60).rounded(.up))
       return minutes > 0 ? "Перерыв через \(minutes) мин" : "Перерыв сейчас"
@@ -320,8 +355,15 @@ extension DayTracker {
     return switch phase {
     case .beforeStart: "Перерывы с \(clock(plan.start))"
     case .lunch: "Обед, перерывы с \(clock(plan.lunchEnd))"
+    case .paused: "Пауза, перерывы после неё"
     default: "Перерывов больше нет"
     }
+  }
+
+  /// `Баланс: +2 ч` or `Баланс: −1 ч 30 мин`; nil when it is under a minute.
+  static func balanceLine(_ seconds: TimeInterval) -> String? {
+    guard abs(seconds) >= 60 else { return nil }
+    return "Баланс: \(seconds > 0 ? "+" : "−")\(DurationFormatter.human(abs(seconds)))"
   }
 
   /// `Ты скипнул уже 2 перерыва из 5`, in the right grammatical number.

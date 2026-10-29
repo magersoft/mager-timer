@@ -70,13 +70,13 @@ struct SnapshotTests {
     let s = snapshot(try makeEngine(), date: "2026-10-27", ticks: [("2026-10-27 17:00", 0), ("2026-10-27 17:20", nil)])
     #expect(s.title == "✓ 13 600 ₽")
     #expect(s.phase == .closed)
-    #expect(s.actions.isEmpty)
+    #expect(s.actions == [.resumeWork])
   }
 
   @Test func `actions depend on the phase`() throws {
     let engine = try makeEngine()
     #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 08:30", 1)]).actions == [.dayOff])
-    #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 10:00", 1)]).actions == [.resetStart, .dayOff])
+    #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 10:00", 1)]).actions == [.pause, .finishEarly, .resetStart, .dayOff])
     #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 17:01", 0)]).actions == [.stillWorking, .finish, .resetStart])
     let off = snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 10:00", 1)]) { $0.setDayOff(.unpaid) }
     #expect(off.actions == [.undoDayOff])

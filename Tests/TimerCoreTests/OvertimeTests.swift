@@ -85,4 +85,43 @@ struct OvertimeTests {
     s.advance(end: end, now: at("2026-10-27 17:00"), idleSeconds: 3600)
     #expect(s == OvertimeState())
   }
+
+  /// Closed by "done" at 18:30 with half an hour of overtime.
+  func closedAtHalfPast() -> OvertimeState {
+    var s = OvertimeState(mode: .manual)
+    s.finish(end: end, now: at("2026-10-27 18:30"))
+    return s
+  }
+
+  @Test func `back to work adds a continuous session to the earlier overtime`() {
+    var s = closedAtHalfPast()
+    s.reopen(at: at("2026-10-27 21:00"))
+    #expect(!s.isClosed)
+    #expect(s.mode == .manual)
+    s.finish(end: end, now: at("2026-10-27 23:00"))
+    #expect(s.overtime(end: end, now: at("2026-10-27 23:30")) == 150 * 60)
+  }
+
+  @Test func `idle time after back to work does not close the day`() {
+    var s = closedAtHalfPast()
+    s.reopen(at: at("2026-10-27 21:00"))
+    run(&s, from: "2026-10-27 21:00", to: "2026-10-27 21:40") { _ in false }
+    #expect(!s.isClosed)
+    #expect(s.overtime(end: end, now: at("2026-10-27 21:40")) == 70 * 60)
+  }
+
+  @Test func `back to work left open counts up to the last activity at midnight`() {
+    var s = closedAtHalfPast()
+    s.reopen(at: at("2026-10-27 21:00"))
+    run(&s, from: "2026-10-27 21:00", to: "2026-10-27 23:00") { $0 <= at("2026-10-27 22:10") }
+    s.finalize(end: end, at: at("2026-10-28 00:00"))
+    #expect(s.overtime(end: end, now: at("2026-10-28 00:00")) == (30 + 70) * 60)
+  }
+
+  @Test func `reopening an open day does nothing`() {
+    var s = OvertimeState()
+    s.reopen(at: at("2026-10-27 19:00"))
+    #expect(s.resumedAt == nil)
+    #expect(s.mode == .auto)
+  }
 }

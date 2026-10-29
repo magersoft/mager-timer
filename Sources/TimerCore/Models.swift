@@ -467,15 +467,45 @@ public struct OvertimeState: Codable, Hashable, Sendable {
   public var lastActivityAt: Date?
   public var closedAt: Date?
   public var finalOvertime: TimeInterval?
+  /// Overtime of earlier sessions today, before "back to work" reopened the day.
+  public var banked: TimeInterval
+  /// The current session started here, by "back to work".
+  public var resumedAt: Date?
 
-  public init(mode: Mode = .auto, lastActivityAt: Date? = nil, closedAt: Date? = nil, finalOvertime: TimeInterval? = nil) {
+  public init(
+    mode: Mode = .auto, lastActivityAt: Date? = nil, closedAt: Date? = nil, finalOvertime: TimeInterval? = nil,
+    banked: TimeInterval = 0, resumedAt: Date? = nil
+  ) {
     self.mode = mode
     self.lastActivityAt = lastActivityAt
     self.closedAt = closedAt
     self.finalOvertime = finalOvertime
+    self.banked = banked
+    self.resumedAt = resumedAt
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    mode = try c.decodeIfPresent(Mode.self, forKey: .mode) ?? .auto
+    lastActivityAt = try c.decodeIfPresent(Date.self, forKey: .lastActivityAt)
+    closedAt = try c.decodeIfPresent(Date.self, forKey: .closedAt)
+    finalOvertime = try c.decodeIfPresent(TimeInterval.self, forKey: .finalOvertime)
+    banked = try c.decodeIfPresent(TimeInterval.self, forKey: .banked) ?? 0
+    resumedAt = try c.decodeIfPresent(Date.self, forKey: .resumedAt)
   }
 
   public var isClosed: Bool { closedAt != nil }
+}
+
+/// Time the user stepped away from a started day; `end` is nil while the pause lasts.
+public struct Pause: Codable, Hashable, Sendable {
+  public var start: Date
+  public var end: Date?
+
+  public init(start: Date, end: Date? = nil) {
+    self.start = start
+    self.end = end
+  }
 }
 
 /// Everything recorded about one calendar day.
@@ -499,6 +529,10 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
   public var startedAt: Date?
   /// The start was reset: today starts only by the button.
   public var manualStartOnly: Bool
+  /// Pauses of the day, in order; only the last can still be open.
+  public var pauses: [Pause]
+  /// How much of the norm was left when the day was finished early.
+  public var undertimeSeconds: Double
 
   public var id: LocalDate { date }
 
@@ -515,7 +549,9 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     notified: Set<String> = [],
     breaks: BreakState = BreakState(),
     startedAt: Date? = nil,
-    manualStartOnly: Bool = false
+    manualStartOnly: Bool = false,
+    pauses: [Pause] = [],
+    undertimeSeconds: Double = 0
   ) {
     self.date = date
     self.earnedRUB = earnedRUB
@@ -530,6 +566,8 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     self.breaks = breaks
     self.startedAt = startedAt
     self.manualStartOnly = manualStartOnly
+    self.pauses = pauses
+    self.undertimeSeconds = undertimeSeconds
   }
 
   public init(from decoder: any Decoder) throws {
@@ -552,5 +590,17 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     breaks = try c.decodeIfPresent(BreakState.self, forKey: .breaks) ?? BreakState()
     startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
     manualStartOnly = try c.decodeIfPresent(Bool.self, forKey: .manualStartOnly) ?? false
+    pauses = try c.decodeIfPresent([Pause].self, forKey: .pauses) ?? []
+    undertimeSeconds = try c.decodeIfPresent(Double.self, forKey: .undertimeSeconds) ?? 0
+  }
+
+  public var openPause: Pause? {
+    guard let last = pauses.last, last.end == nil else { return nil }
+    return last
+  }
+
+  /// The pauses as intervals, an open one running up to `now`.
+  public func resolvedPauses(at now: Date) -> [DateInterval] {
+    pauses.map { DateInterval(start: $0.start, end: max($0.start, $0.end ?? now)) }
   }
 }

@@ -4,6 +4,8 @@ import SwiftUI
 struct MenuContentView: View {
   let model: AppModel
   @Environment(\.openWindow) private var openWindow
+  /// "Finish the day" was pressed and waits for a confirmation, inline: an alert would close the menu.
+  @State private var confirmingFinish = false
 
   private var snapshot: DaySnapshot { model.snapshot }
 
@@ -17,6 +19,11 @@ struct MenuContentView: View {
               resetStart: snapshot.actions.contains(.resetStart) ? { model.resetStart() } : nil)
             if let breaks = snapshot.breaks { breakRow(breaks) }
             if snapshot.actions.contains(.startDay) { startPrompt }
+            if let pause = today.pause {
+              Text("⏸ \(pause)").font(.caption.bold()).monospacedDigit()
+            }
+            if snapshot.actions.contains(.finishEarly) { dayControls(today) }
+            if snapshot.actions.contains(.resumeWork) { resumeWorkPrompt }
             if snapshot.actions.contains(.finish) { afterHoursPrompt }
           }
         } else if let label = snapshot.nonWorkingLabel {
@@ -91,6 +98,50 @@ struct MenuContentView: View {
       .buttonStyle(.borderedProminent)
       .keyboardShortcut(.defaultAction)
       .controlSize(.large)
+  }
+
+  /// Pause or resume, and finishing before the end — confirmed in place, since it leaves undertime.
+  @ViewBuilder
+  private func dayControls(_ today: DaySnapshot.Today) -> some View {
+    if confirmingFinish, let prompt = today.finishPrompt {
+      VStack(alignment: .leading, spacing: 8) {
+        Text(prompt).font(.caption.bold())
+        HStack(spacing: 8) {
+          Button {
+            confirmingFinish = false
+            model.finishEarly()
+          } label: { Text("Закончить").frame(maxWidth: .infinity) }
+            .buttonStyle(.borderedProminent)
+          Button { confirmingFinish = false } label: { Text("Отмена").frame(maxWidth: .infinity) }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(.cancelAction)
+        }
+      }
+      .padding(10)
+      .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    } else {
+      HStack(spacing: 8) {
+        if snapshot.actions.contains(.resume) {
+          Button { model.resume() } label: { Label("Продолжить", systemImage: "play.fill").frame(maxWidth: .infinity) }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        } else if snapshot.actions.contains(.pause) {
+          Button { model.pause() } label: { Label("Пауза", systemImage: "pause.fill").frame(maxWidth: .infinity) }
+            .buttonStyle(.bordered)
+            .help("Отойти: деньги стоят, конец дня сдвигается на длину паузы")
+        }
+        Button { confirmingFinish = true } label: { Text("Закончить день").frame(maxWidth: .infinity) }
+          .buttonStyle(.bordered)
+          .help("Закончить раньше: день оплачен целиком, остаток нормы — недоработка")
+      }
+    }
+  }
+
+  /// A closed day can still be reopened, the same evening.
+  private var resumeWorkPrompt: some View {
+    Button { model.resumeWork() } label: { Label("Продолжить работу", systemImage: "play.fill").frame(maxWidth: .infinity) }
+      .buttonStyle(.bordered)
+      .help("Вернуться к работе: время отлучки не считается")
   }
 
   /// Time-sensitive choice after the scheduled end, shown right under the day it affects.
@@ -251,6 +302,12 @@ private struct MonthSection: View {
       }
       if let overtime = month.overtime {
         Text(overtime).font(.caption).foregroundStyle(.red)
+      }
+      if let undertime = month.undertime {
+        Text(undertime).font(.caption).foregroundStyle(.secondary)
+      }
+      if let balance = month.balance {
+        Text(balance).font(.caption.bold()).monospacedDigit()
       }
     }
   }

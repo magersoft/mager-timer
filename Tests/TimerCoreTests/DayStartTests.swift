@@ -101,7 +101,7 @@ struct DayStartTests {
     tracker.startDay(now: at("2026-10-27 08:00"), engine: engine)
     #expect(tracker.today.startedAt == at("2026-10-27 06:40"))
     _ = tracker.tick(now: at("2026-10-27 06:41"), idleSeconds: 0, latestFX: nil, engine: engine)
-    #expect(engine.phase(at: at("2026-10-27 06:41"), status: tracker.status(engine: engine), overtime: tracker.today.overtime) == .working)
+    #expect(engine.phase(at: at("2026-10-27 06:41"), status: tracker.status(engine: engine, now: at("2026-10-27 06:41")), overtime: tracker.today.overtime) == .working)
 
     var night = fresh()
     night.startDay(now: at("2026-10-27 04:00"), engine: engine)
@@ -126,7 +126,7 @@ struct DayStartTests {
     var tracker = fresh()
     _ = run(&tracker, engine, from: "2026-10-27 06:00", to: "2026-10-27 08:00") { $0 == at("2026-10-27 07:20") }
     #expect(tracker.today.startedAt == at("2026-10-27 07:20"))
-    #expect(tracker.status(engine: engine).plan?.end == at("2026-10-27 15:20"))
+    #expect(tracker.status(engine: engine, now: at("2026-10-27 08:00")).plan?.end == at("2026-10-27 15:20"))
   }
 
   @Test func `at the Mac since before the schedule: the day starts on time`() throws {
@@ -176,7 +176,7 @@ struct DayStartTests {
     _ = run(&tracker, engine, from: "2026-10-27 07:59", to: "2026-10-27 09:00") { _ in true }
     #expect(tracker.today.startedAt == at("2026-10-27 07:59"))
     tracker.today.breaks.skipped = 1
-    tracker.resetStart(engine: engine)
+    tracker.resetStart(now: at("2026-10-27 09:00"), engine: engine)
     #expect(tracker.today.startedAt == nil)
     #expect(tracker.today.earnedRUB == 0)
     #expect(tracker.today.breaks == BreakState())
@@ -201,7 +201,7 @@ struct DayStartTests {
     var tracker = DayTracker(today: started("2026-10-27", at: "07:00"), history: [])
     _ = tracker.tick(now: at("2026-10-27 15:10"), idleSeconds: 0, latestFX: nil, engine: engine)
     tracker.finish(now: at("2026-10-27 15:10"), engine: engine)
-    tracker.resetStart(engine: engine)
+    tracker.resetStart(now: at("2026-10-27 15:11"), engine: engine)
     #expect(tracker.today.startedAt == at("2026-10-27 07:00"))
     #expect(!tracker.snapshot(now: at("2026-10-27 15:11"), engine: engine).actions.contains(.resetStart))
   }

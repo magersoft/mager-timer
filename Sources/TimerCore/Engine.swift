@@ -12,16 +12,28 @@ public struct DayPlan: Hashable, Sendable {
   public var normHours: Double
   /// False until the day is started; the times are then the schedule's, as a forecast.
   public var isStarted: Bool
+  /// Pauses of the day; an open one runs up to the moment the plan was made for.
+  public var pauses: [DateInterval] = []
+  /// The day is on pause since this moment.
+  public var pausedSince: Date?
 
-  public var duration: TimeInterval { end.timeIntervalSince(start) }
+  /// The length of the schedule: from start to end, pauses left out.
+  public var duration: TimeInterval { end.timeIntervalSince(start) - pauses.reduce(0) { $0 + $1.duration } }
   public var scheduleHours: Double { duration / 3600 }
 
   public func dayPay(rate: Double) -> Double { rate * normHours }
 
-  /// Earnings grow evenly from start to end, lunch included, up to the day's pay.
+  /// Time between `from` and `to` that is not paused.
+  public func activeTime(from: Date, to: Date) -> TimeInterval {
+    guard to > from else { return 0 }
+    let paused = pauses.reduce(0) { $0 + max(0, min($1.end, to).timeIntervalSince(max($1.start, from))) }
+    return to.timeIntervalSince(from) - paused
+  }
+
+  /// Earnings grow evenly over the active time from start to end, lunch included, up to the day's pay.
   public func earned(rate: Double, at now: Date) -> Double {
     guard isStarted, duration > 0 else { return 0 }
-    let fraction = min(max(now.timeIntervalSince(start) / duration, 0), 1)
+    let fraction = min(max(activeTime(from: start, to: min(now, end)) / duration, 0), 1)
     return dayPay(rate: rate) * fraction
   }
 
@@ -42,7 +54,7 @@ public struct DayPlan: Hashable, Sendable {
     var slotStart = start
     while slotStart < end {
       let slotEnd = min(slotStart.addingTimeInterval(3600), end)
-      let counted = min(max(now.timeIntervalSince(slotStart), 0), slotEnd.timeIntervalSince(slotStart))
+      let counted = activeTime(from: slotStart, to: min(now, slotEnd))
       let state: HourSlot.State = now >= slotEnd ? .done : (now >= slotStart ? .inProgress : .upcoming)
       slots.append(HourSlot(start: slotStart, end: slotEnd, earnedRUB: counted * perSecond, state: state))
       slotStart = slotEnd
@@ -103,6 +115,8 @@ public enum DayPhase: Hashable, Sendable {
   case beforeStart
   case working
   case lunch
+  /// The user stepped away: money stands still and the end moves on.
+  case paused
   /// After the scheduled end; overtime may be accruing.
   case afterHours
   case closed
@@ -142,8 +156,11 @@ public struct Engine: Sendable {
 
   public func isCalendarApproximate(for date: LocalDate) -> Bool { !workCalendar.hasData(for: date.year) }
 
-  /// Paid leave runs by the schedule; only a worked day follows `start`.
-  public func status(on date: LocalDate, dayOffs: [LocalDate: DayOff] = [:], start: DayStart = .scheduled) -> DayStatus {
+  /// Paid leave runs by the schedule; only a worked day follows `start` and its pauses.
+  public func status(
+    on date: LocalDate, dayOffs: [LocalDate: DayOff] = [:], start: DayStart = .scheduled,
+    pauses: [DateInterval] = [], pausedSince: Date? = nil
+  ) -> DayStatus {
     let kind = workCalendar.kind(of: date, calendar: calendar)
     if kind == .nonWorking { return .nonWorking(.holiday) }
     let isShort = kind == .short
@@ -151,23 +168,27 @@ public struct Engine: Sendable {
     switch dayOffs[date] {
     case .paid: return .paidLeave(plan(for: date, isShort: isShort), .paidDayOff)
     case .unpaid: return .nonWorking(.unpaidDayOff)
-    case nil: return .working(plan(for: date, isShort: isShort, start: start))
+    case nil: return .working(plan(for: date, isShort: isShort, start: start, pauses: pauses, pausedSince: pausedSince))
     }
   }
 
-  /// The whole day moves with its actual start and keeps its length; lunch stays on the clock.
-  public func plan(for date: LocalDate, isShort: Bool, start: DayStart = .scheduled) -> DayPlan {
+  /// The whole day moves with its actual start and keeps its length; pauses push the end further.
+  /// Lunch stays on the clock.
+  public func plan(
+    for date: LocalDate, isShort: Bool, start: DayStart = .scheduled, pauses: [DateInterval] = [], pausedSince: Date? = nil
+  ) -> DayPlan {
     let s = settings.schedule
     let scheduled = date.date(at: s.start, calendar: calendar)
     let begin = if case .at(let moment) = start { moment } else { scheduled }
-    var end = date.date(at: s.end, calendar: calendar).addingTimeInterval(begin.timeIntervalSince(scheduled))
+    let paused = pauses.reduce(0) { $0 + $1.duration }
+    var end = date.date(at: s.end, calendar: calendar).addingTimeInterval(begin.timeIntervalSince(scheduled) + paused)
     if isShort { end = max(begin, end.addingTimeInterval(-3600)) }
     let clamp = { (moment: Date) in min(max(moment, begin), end) }
     return DayPlan(
       date: date, isShort: isShort, start: begin, end: end,
       lunchStart: clamp(date.date(at: s.lunchStart, calendar: calendar)),
       lunchEnd: clamp(date.date(at: s.lunchEnd, calendar: calendar)),
-      normHours: isShort ? 7 : 8, isStarted: start != .notStarted)
+      normHours: isShort ? 7 : 8, isStarted: start != .notStarted, pauses: pauses, pausedSince: pausedSince)
   }
 
   /// Σ incomes in RUB ÷ the month's norm hours.
@@ -190,10 +211,13 @@ public struct Engine: Sendable {
     case .nonWorking(let reason): return .nonWorking(reason)
     }
     if !plan.isStarted || now < plan.start { return .beforeStart }
+    // A day finished early is closed before its end.
+    if overtime.isClosed { return .closed }
+    if plan.pausedSince != nil { return .paused }
     if now < plan.end {
       return (plan.lunchStart..<plan.lunchEnd).contains(now) ? .lunch : .working
     }
-    return overtime.isClosed ? .closed : .afterHours
+    return .afterHours
   }
 
   /// Paid days strictly after `date`, in order, within a horizon.
@@ -227,34 +251,39 @@ public struct Engine: Sendable {
 }
 
 extension OvertimeState {
+  /// The current session counts from the scheduled end, or from "back to work" if later.
+  func sessionStart(end: Date) -> Date { max(end, resumedAt ?? end) }
+
   /// Overtime so far, given the scheduled end.
   public func overtime(end: Date, now: Date) -> TimeInterval {
     if let finalOvertime { return finalOvertime }
-    guard now > end else { return 0 }
+    let from = sessionStart(end: end)
+    guard now > from else { return banked }
     switch mode {
-    case .manual: return now.timeIntervalSince(end)
-    case .auto: return max(0, (lastActivityAt ?? end).timeIntervalSince(end))
+    case .manual: return banked + now.timeIntervalSince(from)
+    case .auto: return banked + max(0, (lastActivityAt ?? from).timeIntervalSince(from))
     }
   }
 
   /// Advances automatic tracking. `idleSeconds` is nil while the screen is locked or the Mac sleeps.
   public mutating func advance(end: Date, now: Date, idleSeconds: TimeInterval?) {
-    guard !isClosed, now > end else { return }
-    let previous = max(end, lastActivityAt ?? end)
+    let from = sessionStart(end: end)
+    guard !isClosed, now > from else { return }
+    let previous = max(from, lastActivityAt ?? from)
     if let idleSeconds {
       let activity = now.addingTimeInterval(-idleSeconds)
       if activity > previous {
         if mode == .auto, activity.timeIntervalSince(previous) >= Self.idleLimit {
-          close(at: previous.addingTimeInterval(Self.idleLimit), overtime: previous.timeIntervalSince(end))
+          close(at: previous.addingTimeInterval(Self.idleLimit), overtime: banked + previous.timeIntervalSince(from))
           return
         }
         lastActivityAt = activity
       }
     }
     guard mode == .auto else { return }
-    let last = max(end, lastActivityAt ?? end)
+    let last = max(from, lastActivityAt ?? from)
     if now.timeIntervalSince(last) >= Self.idleLimit {
-      close(at: last.addingTimeInterval(Self.idleLimit), overtime: last.timeIntervalSince(end))
+      close(at: last.addingTimeInterval(Self.idleLimit), overtime: banked + last.timeIntervalSince(from))
     }
   }
 
@@ -270,15 +299,28 @@ extension OvertimeState {
     close(at: now, overtime: overtime(end: end, now: now))
   }
 
+  /// "Back to work" on a day closed after its end: a new session that counts on top of the
+  /// earlier ones, continuously, as "still working" does — the user said they are working.
+  public mutating func reopen(at moment: Date) {
+    guard isClosed else { return }
+    banked = finalOvertime ?? 0
+    closedAt = nil
+    finalOvertime = nil
+    mode = .manual
+    resumedAt = moment
+    lastActivityAt = moment
+  }
+
   /// Closes a day that was left open (app quit, or the day rolled over).
   public mutating func finalize(end: Date, at moment: Date) {
     guard !isClosed else { return }
+    let from = sessionStart(end: end)
     let value: TimeInterval
     switch mode {
-    case .manual: value = max(0, min(moment, lastActivityAt ?? end).timeIntervalSince(end))
-    case .auto: value = max(0, (lastActivityAt ?? end).timeIntervalSince(end))
+    case .manual: value = max(0, min(moment, lastActivityAt ?? from).timeIntervalSince(from))
+    case .auto: value = max(0, (lastActivityAt ?? from).timeIntervalSince(from))
     }
-    close(at: moment, overtime: value)
+    close(at: moment, overtime: banked + value)
   }
 
   private mutating func close(at moment: Date, overtime: TimeInterval) {

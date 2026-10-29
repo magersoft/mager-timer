@@ -14,12 +14,20 @@ extension Engine {
     return boundary.timeIntervalSince(moment) >= Self.breakQuietWindow
   }
 
-  /// Breaks a day brings when worked without pauses: counted from the start and from the end of lunch.
+  /// Breaks a day brings when worked without skipping: counted from the start and from the end
+  /// of lunch and of every pause.
   public func plannedBreaks(_ plan: DayPlan) -> Int {
     let breaks = settings.breaks
     guard breaks.enabled else { return 0 }
-    var segments = [(plan.start, plan.end)]
-    if plan.lunchEnd > plan.lunchStart { segments = [(plan.start, plan.lunchStart), (plan.lunchEnd, plan.end)] }
+    var gaps = plan.pauses
+    if plan.lunchEnd > plan.lunchStart { gaps.append(DateInterval(start: plan.lunchStart, end: plan.lunchEnd)) }
+    var segments: [(Date, Date)] = []
+    var from = plan.start
+    for gap in gaps.sorted(by: { $0.start < $1.start }) {
+      if gap.start > from { segments.append((from, min(gap.start, plan.end))) }
+      from = max(from, gap.end)
+    }
+    if from < plan.end { segments.append((from, plan.end)) }
     var count = 0
     for (start, end) in segments {
       var due = start.addingTimeInterval(breaks.work)
@@ -47,12 +55,13 @@ extension DayTracker {
 
   /// Breaks run on a worked day, from the start until the day is closed, outside lunch.
   public func breaksRunning(phase: DayPhase, engine: Engine) -> Bool {
-    engine.settings.breaks.enabled && status(engine: engine).plan != nil && (phase == .working || phase == .afterHours)
+    engine.settings.breaks.enabled && engine.status(on: today.date, dayOffs: dayOffs).plan != nil
+      && (phase == .working || phase == .afterHours)
   }
 
   /// When the next break is due, before the lunch and end-of-day rules apply.
-  public func breakDue(engine: Engine) -> Date? {
-    guard let plan = status(engine: engine).plan else { return nil }
+  public func breakDue(now: Date, engine: Engine) -> Date? {
+    guard let plan = status(engine: engine, now: now).plan else { return nil }
     let state = today.breaks
     return state.snoozedUntil ?? max(state.lastRestAt ?? plan.start, plan.start).addingTimeInterval(engine.settings.breaks.work)
   }
@@ -66,7 +75,7 @@ extension DayTracker {
     let gap = state.lastTick.map { now.timeIntervalSince($0) } ?? 0
     state.lastTick = now
 
-    guard settings.enabled, let plan = status(engine: engine).plan else {
+    guard settings.enabled, let plan = status(engine: engine, now: now).plan else {
       state.waitingForCall = false
       guard state.isActive else { return [] }
       state.activeSince = nil
@@ -126,7 +135,7 @@ extension DayTracker {
 
   /// Moves the current break, on screen or coming, by `minutes`; at most twice per break.
   public mutating func snoozeBreak(minutes: Int, now: Date, engine: Engine) {
-    guard today.breaks.canSnooze, let due = breakDue(engine: engine) else { return }
+    guard today.breaks.canSnooze, let due = breakDue(now: now, engine: engine) else { return }
     today.breaks.snoozedUntil = max(now, due).addingTimeInterval(TimeInterval(minutes * 60))
     today.breaks.snoozes += 1
     today.breaks.activeSince = nil
@@ -143,8 +152,9 @@ extension DayTracker {
 
   /// Starts a break right away.
   public mutating func startBreakNow(now: Date, engine: Engine) {
-    guard !today.breaks.isActive, status(engine: engine).plan?.isStarted == true else { return }
-    let phase = engine.phase(at: now, status: status(engine: engine), overtime: today.overtime)
+    let status = status(engine: engine, now: now)
+    guard !today.breaks.isActive, status.plan?.isStarted == true else { return }
+    let phase = engine.phase(at: now, status: status, overtime: today.overtime)
     today.breaks.start(at: now, overtime: phase == .afterHours)
   }
 }

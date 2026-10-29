@@ -55,13 +55,20 @@ public struct DayTracker: Sendable {
 
   /// A past day counts in full; open overtime is closed at what was observed. A working day
   /// that was never started was still worked (away from the Mac), as if started by the schedule.
+  /// A pause never ended finishes the day early, at the moment it began.
   private static func finalize(_ record: inout DayRecord, engine: Engine, dayOffs: [LocalDate: DayOff]) {
     var offs = dayOffs
     offs[record.date] = record.dayOff
     if record.startedAt == nil, case .working(let plan) = engine.status(on: record.date, dayOffs: offs) {
       record.startedAt = plan.start
     }
-    let status = engine.status(on: record.date, dayOffs: offs, start: record.start)
+    let pausedSince = record.openPause?.start
+    let pauses = record.resolvedPauses(at: pausedSince ?? record.date.startOfDay(calendar: engine.calendar))
+    let status = engine.status(on: record.date, dayOffs: offs, start: record.start, pauses: pauses)
+    if let pausedSince, !record.overtime.isClosed, let plan = status.plan {
+      record.undertimeSeconds = max(0, plan.end.timeIntervalSince(pausedSince))
+      record.overtime.finish(end: plan.end, now: pausedSince)
+    }
     guard let plan = status.paidPlan else {
       record.earnedRUB = 0
       record.normHours = 0
@@ -86,11 +93,16 @@ public struct DayTracker: Sendable {
     return offs
   }
 
-  public func status(engine: Engine) -> DayStatus { engine.status(on: today.date, dayOffs: dayOffs, start: today.start) }
+  /// Today's status at `now`: an open pause runs up to it and keeps pushing the end.
+  public func status(engine: Engine, now: Date) -> DayStatus {
+    engine.status(
+      on: today.date, dayOffs: dayOffs, start: today.start,
+      pauses: today.resolvedPauses(at: now), pausedSince: today.openPause?.start)
+  }
 
   /// Scheduled hours are on and the day has not started: activity now would start it.
   public func awaitsStart(now: Date, engine: Engine) -> Bool {
-    guard case .working(let plan) = status(engine: engine), !plan.isStarted, !today.manualStartOnly else { return false }
+    guard case .working(let plan) = status(engine: engine, now: now), !plan.isStarted, !today.manualStartOnly else { return false }
     return (plan.start..<plan.end).contains(now)
   }
 
@@ -108,11 +120,11 @@ public struct DayTracker: Sendable {
   public mutating func tick(now: Date, idleSeconds: TimeInterval?, latestFX: FXRates?, engine: Engine, checkGoals: Bool = true) -> [Event] {
     if today.fx == nil, let latestFX { today.fx = latestFX }
     // Forgot to press "start": the first activity within the scheduled hours starts the day.
-    if let idleSeconds, awaitsStart(now: now, engine: engine), let scheduled = status(engine: engine).plan {
+    if let idleSeconds, awaitsStart(now: now, engine: engine), let scheduled = status(engine: engine, now: now).plan {
       let activity = now.addingTimeInterval(-idleSeconds)
       if (scheduled.start..<scheduled.end).contains(activity) { today.startedAt = activity }
     }
-    let status = status(engine: engine)
+    let status = status(engine: engine, now: now)
     guard let plan = status.paidPlan else {
       today.earnedRUB = 0
       today.normHours = 0
@@ -124,7 +136,8 @@ public struct DayTracker: Sendable {
     today.rateRUB = rate
     today.normHours = plan.normHours
     today.scheduleHours = plan.scheduleHours
-    today.earnedRUB = plan.earned(rate: rate, at: now)
+    // A closed day, early or not, is paid in full.
+    today.earnedRUB = status.plan != nil && today.overtime.isClosed ? plan.dayPay(rate: rate) : plan.earned(rate: rate, at: now)
     // On paid leave the money flows, but there is nothing to notify and no overtime;
     // a day not yet started has neither.
     guard status.plan != nil, plan.isStarted else {
@@ -167,32 +180,96 @@ public struct DayTracker: Sendable {
 
   /// "Start the day": the day runs from now, early or late; once only.
   public mutating func startDay(now: Date, engine: Engine) {
-    guard today.startedAt == nil, status(engine: engine).plan != nil else { return }
+    guard today.startedAt == nil, status(engine: engine, now: now).plan != nil else { return }
     today.startedAt = now
   }
 
   /// A start by mistake: the day is back to not started, as if nothing ran, and from now on
   /// starts only by the button. A day already closed keeps its start.
-  public mutating func resetStart(engine: Engine) {
-    guard today.startedAt != nil, !today.overtime.isClosed, status(engine: engine).plan != nil else { return }
+  public mutating func resetStart(now: Date, engine: Engine) {
+    guard today.startedAt != nil, !today.overtime.isClosed, status(engine: engine, now: now).plan != nil else { return }
     today.startedAt = nil
     today.manualStartOnly = true
     today.earnedRUB = 0
     today.overtime = OvertimeState()
     today.overtimeSeconds = 0
     today.breaks = BreakState()
+    today.pauses = []
+    today.undertimeSeconds = 0
     today.notified = today.notified.filter { $0 != "start" && $0 != "end" && !$0.hasPrefix("overtime-") }
   }
 
   public mutating func stillWorking(now: Date, engine: Engine) {
-    guard let plan = status(engine: engine).plan, plan.isStarted, now >= plan.end else { return }
+    guard let plan = status(engine: engine, now: now).plan, plan.isStarted, now >= plan.end else { return }
     today.overtime.startManual()
   }
 
   public mutating func finish(now: Date, engine: Engine) {
-    guard let plan = status(engine: engine).plan, plan.isStarted, now >= plan.end else { return }
+    guard let plan = status(engine: engine, now: now).plan, plan.isStarted, now >= plan.end else { return }
     today.overtime.finish(end: plan.end, now: now)
     today.overtimeSeconds = today.overtime.overtime(end: plan.end, now: now)
+  }
+
+  /// A started day, still running and before its end.
+  private func runningPlan(now: Date, engine: Engine) -> DayPlan? {
+    guard let plan = status(engine: engine, now: now).plan, plan.isStarted, now >= plan.start,
+          !today.overtime.isClosed, now < plan.end else { return nil }
+    return plan
+  }
+
+  /// "Pause": money stands still, and the end moves on by as long as the pause lasts.
+  public mutating func pause(now: Date, engine: Engine) {
+    guard runningPlan(now: now, engine: engine) != nil, today.openPause == nil else { return }
+    today.pauses.append(Pause(start: now))
+    today.breaks.activeSince = nil
+  }
+
+  /// "Resume" after a pause.
+  public mutating func resume(now: Date, engine: Engine) {
+    guard !today.overtime.isClosed, let since = today.openPause?.start else { return }
+    today.pauses[today.pauses.count - 1].end = max(now, since)
+    rest(since: since, now: now, engine: engine)
+  }
+
+  /// "Finish the day" before its end: paid in full, the rest of the norm left as undertime.
+  /// From a pause, the day ends where the pause began; the pause stays open, so "back to work" ends it.
+  public mutating func finishEarly(now: Date, engine: Engine) {
+    guard let plan = runningPlan(now: now, engine: engine) else { return }
+    let since = today.openPause?.start ?? now
+    if today.openPause == nil { today.pauses.append(Pause(start: now)) }
+    // The open pause pushes the end with `now`, so what is left is simply end − now.
+    today.undertimeSeconds = max(0, plan.end.timeIntervalSince(now))
+    today.overtime.finish(end: plan.end, now: since)
+    today.overtimeSeconds = 0
+    today.breaks.activeSince = nil
+    tickEarned(engine: engine)
+  }
+
+  /// "Back to work" on a day closed today. Closed early, the time away was a pause and the day
+  /// runs to its new end; closed after the end, a new overtime session starts.
+  public mutating func resumeWork(now: Date, engine: Engine) {
+    guard today.overtime.isClosed, let plan = status(engine: engine, now: now).plan, plan.isStarted else { return }
+    if let since = today.openPause?.start {
+      today.pauses[today.pauses.count - 1].end = max(now, since)
+      today.overtime = OvertimeState(mode: .manual, lastActivityAt: now, resumedAt: now)
+      today.undertimeSeconds = 0
+      rest(since: since, now: now, engine: engine)
+    } else {
+      let closedAt = today.overtime.closedAt ?? now
+      today.overtime.reopen(at: now)
+      rest(since: closedAt, now: now, engine: engine)
+    }
+  }
+
+  /// Time away at least as long as a break was a break.
+  private mutating func rest(since: Date, now: Date, engine: Engine) {
+    if now.timeIntervalSince(since) >= engine.settings.breaks.length { today.breaks.restart(at: now) }
+  }
+
+  /// A closed day is paid in full right away, not on the next tick.
+  private mutating func tickEarned(engine: Engine) {
+    let rate = engine.rate(year: today.date.year, month: today.date.month, fx: today.fx).perHourRUB
+    today.earnedRUB = rate * today.normHours
   }
 
   public mutating func setDayOff(_ dayOff: DayOff?) {
@@ -209,6 +286,8 @@ public struct DayTracker: Sendable {
     public var earnedRUB: Double
     public var expectedRUB: Double
     public var overtimeSeconds: Double
+    /// The norm left unworked by days finished early.
+    public var undertimeSeconds: Double
     /// Overtime valued at each day's rate.
     public var giftedRUB: Double
   }
@@ -224,6 +303,7 @@ public struct DayTracker: Sendable {
       earnedRUB: records.reduce(0) { $0 + $1.earnedRUB },
       expectedRUB: expected,
       overtimeSeconds: records.reduce(0) { $0 + $1.overtimeSeconds },
+      undertimeSeconds: records.reduce(0) { $0 + $1.undertimeSeconds },
       giftedRUB: records.reduce(0) { $0 + $1.overtimeSeconds / 3600 * $1.rateRUB })
   }
 
@@ -249,7 +329,7 @@ public struct DayTracker: Sendable {
     if !achieved {
       let rate = engine.rate(year: today.date.year, month: today.date.month, fx: fx).perHourRUB
       var remaining = target - saved
-      if let plan = status(engine: engine).paidPlan {
+      if let plan = status(engine: engine, now: now).paidPlan {
         remaining -= (plan.dayPay(rate: rate) - today.earnedRUB) * share
         if remaining <= 0 { forecast = today.date }
       }

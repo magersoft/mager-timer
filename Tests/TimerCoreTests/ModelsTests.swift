@@ -22,6 +22,32 @@ struct ModelsTests {
     try roundTrip(goal)
   }
 
+  @Test func `pauses and resumed overtime survive a JSON round trip`() throws {
+    try roundTrip(DayRecord(
+      date: day("2026-10-27"), startedAt: at("2026-10-27 09:00"),
+      pauses: [Pause(start: at("2026-10-27 11:00"), end: at("2026-10-27 11:20")), Pause(start: at("2026-10-27 14:00"))],
+      undertimeSeconds: 3600))
+    try roundTrip(OvertimeState(mode: .manual, lastActivityAt: at("2026-10-27 21:00"), banked: 1800, resumedAt: at("2026-10-27 21:00")))
+  }
+
+  @Test func `records without pauses still load`() throws {
+    let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
+    let r = try d.decode(DayRecord.self, from: Data(#"{"date":"2026-10-27","overtime":{"mode":"auto"}}"#.utf8))
+    #expect(r.pauses.isEmpty)
+    #expect(r.undertimeSeconds == 0)
+    #expect(r.overtime.banked == 0)
+    #expect(r.overtime.resumedAt == nil)
+  }
+
+  @Test func `an open pause runs up to now`() {
+    let r = DayRecord(
+      date: day("2026-10-27"),
+      pauses: [Pause(start: at("2026-10-27 11:00"), end: at("2026-10-27 11:20")), Pause(start: at("2026-10-27 14:00"))])
+    #expect(r.openPause?.start == at("2026-10-27 14:00"))
+    let lengths: [TimeInterval] = r.resolvedPauses(at: at("2026-10-27 14:42")).map(\.duration)
+    #expect(lengths == [1200, 2520])
+  }
+
   @Test func `settings missing keys fall back to defaults`() throws {
     let s = try JSONDecoder().decode(Settings.self, from: Data(#"{"displayCurrency":"EUR"}"#.utf8))
     #expect(s.displayCurrency == .eur)

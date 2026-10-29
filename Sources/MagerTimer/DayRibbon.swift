@@ -1,7 +1,7 @@
 import TimerCore
 import SwiftUI
 
-/// The working day as one strip: an hour per segment, lunch tinted, a "now" marker,
+/// The working day as one strip: an hour per segment, lunch and pauses tinted, a "now" marker,
 /// and overtime hatched in red past the scheduled end.
 struct DayRibbon: View {
   let today: DaySnapshot.Today
@@ -47,7 +47,8 @@ struct DayRibbon: View {
         Text(" ").hidden()
         if let hovered, today.hours.indices.contains(hovered) {
           let hour = today.hours[hovered]
-          Text("\(hour.label) · \(hour.state == .upcoming ? "впереди" : hour.amount)\(hour.isLunch ? " · обед" : "")")
+          let notes = (hour.isLunch ? ["обед"] : []) + hour.pauses
+          Text(([hour.label, hour.state == .upcoming ? "впереди" : hour.amount] + notes).joined(separator: " · "))
         } else if today.overtimeHours >= 1 / 60 {
           Text("После \(today.endTime) — бесплатно").foregroundStyle(.red)
         } else if let remaining = today.remaining {
@@ -61,12 +62,14 @@ struct DayRibbon: View {
   }
 
   private func segment(_ hour: DaySnapshot.Hour, index: Int) -> some View {
-    let tint: Color = hour.isLunch ? .orange : .accentColor
+    let tint: Color = hour.isPaused ? .gray : hour.isLunch ? .orange : .accentColor
     return GeometryReader { geo in
       ZStack(alignment: .leading) {
         RoundedRectangle(cornerRadius: 3).fill(.quaternary)
         RoundedRectangle(cornerRadius: 3).fill(tint).frame(width: geo.size.width * hour.fraction)
-        if hour.isLunch {
+        if hour.isPaused {
+          Text("⏸").font(.system(size: 9)).frame(maxWidth: .infinity)
+        } else if hour.isLunch {
           Text("🍜").font(.system(size: 9)).frame(maxWidth: .infinity)
         }
       }
