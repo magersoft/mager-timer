@@ -67,11 +67,15 @@ struct BreakTests {
 
   // MARK: - Plan
 
-  @Test func `planned breaks follow the schedule`() throws {
+  @Test func `planned breaks follow the schedule and the lunches taken`() throws {
     let engine = try makeEngine(schedule: morning)
-    #expect(engine.plannedBreaks(engine.plan(for: day("2026-10-27"), isShort: false)) == 5)
+    var plan = engine.plan(for: day("2026-10-27"), isShort: false)
+    // 07:50 … 13:50 hourly; 14:50 is too close to the end.
+    #expect(engine.plannedBreaks(plan) == 7)
+    plan.lunches = [DateInterval(start: at("2026-10-27 12:00"), end: at("2026-10-27 13:00"))]
+    #expect(engine.plannedBreaks(plan) == 6)
     let lateLunch = try makeEngine(schedule: Schedule(start: t(7, 0), end: t(15, 0), lunchStart: t(13, 0)))
-    #expect(lateLunch.plannedBreaks(lateLunch.plan(for: day("2026-10-27"), isShort: false)) == 5)
+    #expect(lateLunch.plannedBreaks(lateLunch.plan(for: day("2026-10-27"), isShort: false)) == 7)
     var off = engine
     off.settings.breaks.enabled = false
     #expect(off.plannedBreaks(off.plan(for: day("2026-10-27"), isShort: false)) == 0)
@@ -79,8 +83,8 @@ struct BreakTests {
 
   @Test func `a shortened day plans fewer breaks`() throws {
     let engine = try makeEngine()
-    #expect(engine.plannedBreaks(engine.plan(for: day("2026-10-27"), isShort: false)) == 5)
-    #expect(engine.plannedBreaks(engine.plan(for: day("2026-11-03"), isShort: true)) == 4)
+    #expect(engine.plannedBreaks(engine.plan(for: day("2026-10-27"), isShort: false)) == 7)
+    #expect(engine.plannedBreaks(engine.plan(for: day("2026-11-03"), isShort: true)) == 6)
   }
 
   // MARK: - Schedule
@@ -92,12 +96,16 @@ struct BreakTests {
     #expect(moments == [Moment(time: at("2026-10-27 07:49"), event: .warn(canSnooze: true)), Moment(time: at("2026-10-27 07:50"), event: .started)])
   }
 
-  @Test func `a whole day: breaks skip lunch and its last minutes, and go on into overtime`() throws {
+  @Test func `a whole day: breaks skip lunch and the last minutes, and go on into overtime`() throws {
     let engine = try makeEngine(schedule: morning)
     var tracker = tracker()
-    let moments = run(&tracker, engine, from: "2026-10-27 07:00", to: "2026-10-27 15:45")
-    #expect(starts(moments) == ["07:50", "08:50", "09:50", "10:50", "13:50", "15:40"].map { at("2026-10-27 \($0)") })
-    #expect(tracker.today.breaks.taken == 5)
+    var moments = run(&tracker, engine, from: "2026-10-27 07:00", to: "2026-10-27 12:00")
+    tracker.startLunch(now: at("2026-10-27 12:00"), engine: engine)
+    moments += run(&tracker, engine, from: "2026-10-27 12:01", to: "2026-10-27 13:00")
+    tracker.endLunch(now: at("2026-10-27 13:00"), engine: engine)
+    moments += run(&tracker, engine, from: "2026-10-27 13:00", to: "2026-10-27 15:45")
+    #expect(starts(moments) == ["07:50", "08:50", "09:50", "10:50", "11:50", "13:50", "15:40"].map { at("2026-10-27 \($0)") })
+    #expect(tracker.today.breaks.taken == 6)
     #expect(tracker.today.breaks.overtimeBreaks == 1)
     #expect(tracker.today.breaks.skipped == 0)
   }
@@ -220,17 +228,48 @@ struct BreakTests {
     #expect(tracker.today.breaks.isActive)
   }
 
-  @Test func `a break snoozed into the last minutes before lunch disappears uncounted`() throws {
+  @Test func `a break snoozed into lunch disappears uncounted`() throws {
     let engine = try makeEngine(schedule: morning)
     var tracker = tracker()
-    tracker.today.breaks.lastRestAt = at("2026-10-27 10:30")
-    run(&tracker, engine, from: "2026-10-27 10:30", to: "2026-10-27 11:20")
-    tracker.snoozeBreak(minutes: 15, now: at("2026-10-27 11:20"), engine: engine)
-    run(&tracker, engine, from: "2026-10-27 11:21", to: "2026-10-27 11:35")
-    tracker.snoozeBreak(minutes: 15, now: at("2026-10-27 11:35"), engine: engine)
-    let moments = run(&tracker, engine, from: "2026-10-27 11:36", to: "2026-10-27 12:30")
+    tracker.today.breaks.lastRestAt = at("2026-10-27 11:10")
+    run(&tracker, engine, from: "2026-10-27 11:10", to: "2026-10-27 12:00")
+    tracker.snoozeBreak(minutes: 10, now: at("2026-10-27 12:00"), engine: engine)
+    run(&tracker, engine, from: "2026-10-27 12:01", to: "2026-10-27 12:04")
+    tracker.startLunch(now: at("2026-10-27 12:05"), engine: engine)
+    let moments = run(&tracker, engine, from: "2026-10-27 12:05", to: "2026-10-27 12:30")
     #expect(moments.isEmpty)
     #expect(tracker.today.breaks.skipped == 0)
+  }
+
+  @Test func `a break due in lunch does not happen, and a long lunch is a rest`() throws {
+    let engine = try makeEngine(schedule: morning)
+    var tracker = tracker()
+    tracker.today.breaks.lastRestAt = at("2026-10-27 12:30")
+    run(&tracker, engine, from: "2026-10-27 12:30", to: "2026-10-27 13:00")
+    tracker.startLunch(now: at("2026-10-27 13:00"), engine: engine)
+    #expect(run(&tracker, engine, from: "2026-10-27 13:00", to: "2026-10-27 13:30").isEmpty)
+    tracker.endLunch(now: at("2026-10-27 13:30"), engine: engine)
+    #expect(tracker.today.breaks.skipped == 0)
+    #expect(tracker.breakDue(now: at("2026-10-27 13:30"), engine: engine) == at("2026-10-27 14:20"))
+  }
+
+  @Test func `a short lunch leaves the countdown as it was`() throws {
+    let engine = try makeEngine(schedule: morning)
+    var tracker = tracker()
+    tracker.today.breaks.lastRestAt = at("2026-10-27 11:00")
+    run(&tracker, engine, from: "2026-10-27 11:00", to: "2026-10-27 11:30")
+    tracker.startLunch(now: at("2026-10-27 11:30"), engine: engine)
+    run(&tracker, engine, from: "2026-10-27 11:30", to: "2026-10-27 11:35")
+    tracker.endLunch(now: at("2026-10-27 11:35"), engine: engine)
+    #expect(tracker.breakDue(now: at("2026-10-27 11:35"), engine: engine) == at("2026-10-27 11:50"))
+  }
+
+  @Test func `lunch of a break's length or more restarts the countdown at the return`() throws {
+    let engine = try makeEngine(schedule: morning)
+    var tracker = tracker()
+    tracker.startLunch(now: at("2026-10-27 11:30"), engine: engine)
+    tracker.endLunch(now: at("2026-10-27 11:50"), engine: engine)
+    #expect(tracker.breakDue(now: at("2026-10-27 11:50"), engine: engine) == at("2026-10-27 12:40"))
   }
 
   @Test func `skipping counts and starts the countdown over`() throws {
@@ -299,28 +338,31 @@ struct BreakTests {
     run(&tracker, engine, from: "2026-10-27 07:51", to: "2026-10-27 08:17")
     let breaks = try #require(tracker.snapshot(now: at("2026-10-27 08:17"), engine: engine).breaks)
     #expect(breaks.status == "Перерыв через 23 мин")
-    #expect(breaks.tally == "скипнуто 1 из 5")
+    #expect(breaks.tally == "скипнуто 1 из 7")
     #expect(breaks.canStartNow)
   }
 
-  @Test func `the menu tells when the break waits for lunch or the end of the day`() throws {
+  @Test func `a break just before the lunch reminder comes, and none comes close to the end`() throws {
     let engine = try makeEngine(schedule: morning)
     var tracker = tracker()
     tracker.today.breaks.lastRestAt = at("2026-10-27 11:00")
-    run(&tracker, engine, from: "2026-10-27 11:00", to: "2026-10-27 11:30")
-    #expect(tracker.snapshot(now: at("2026-10-27 11:30"), engine: engine).breaks?.status == "Следующий перерыв после обеда")
-    tracker.today.breaks.lastRestAt = at("2026-10-27 14:00")
-    run(&tracker, engine, from: "2026-10-27 14:00", to: "2026-10-27 14:30")
-    #expect(tracker.snapshot(now: at("2026-10-27 14:30"), engine: engine).breaks?.status == "До конца графика перерывов нет")
+    let moments = run(&tracker, engine, from: "2026-10-27 11:00", to: "2026-10-27 11:50")
+    #expect(starts(moments) == [at("2026-10-27 11:50")])
+    var late = self.tracker()
+    late.today.breaks.lastRestAt = at("2026-10-27 14:00")
+    run(&late, engine, from: "2026-10-27 14:00", to: "2026-10-27 14:30")
+    #expect(late.snapshot(now: at("2026-10-27 14:30"), engine: engine).breaks?.status == "До конца графика перерывов нет")
   }
 
   @Test func `at lunch, before the start and after finishing the row explains the pause`() throws {
     let engine = try makeEngine(schedule: morning)
     var day = tracker()
+    day.startLunch(now: at("2026-10-27 12:10"), engine: engine)
     run(&day, engine, from: "2026-10-27 12:10", to: "2026-10-27 12:30")
     let lunch = try #require(day.snapshot(now: at("2026-10-27 12:30"), engine: engine).breaks)
-    #expect(lunch.status == "Обед, перерывы с 13:00")
-    #expect(lunch.tally == "скипнуто 0 из 5")
+    #expect(lunch.status == "Обед, перерывы после него")
+    // Lunch so far, 12:10–12:30, is a gap in the plan: 07:50 … 11:50, then 13:20 and 14:20.
+    #expect(lunch.tally == "скипнуто 0 из 7")
     #expect(!lunch.canStartNow)
     #expect(day.snapshot(now: at("2026-10-27 06:30"), engine: engine).breaks?.status == "Перерывы с 07:00")
     _ = day.tick(now: at("2026-10-27 15:05"), idleSeconds: 0, latestFX: nil, engine: engine)
@@ -349,8 +391,9 @@ struct BreakTests {
     #expect(screen.remaining == "09:42")
     #expect(screen.prompt == "Встань и отойди от компа на 10 мин")
     #expect(screen.earnings == "За перерыв капнет ≈ 283 ₽")
-    #expect(screen.skipped == "Ты скипнул уже 2 перерыва из 5")
+    #expect(screen.skipped == "Ты скипнул уже 2 перерыва из 7")
     #expect(screen.canSnooze)
+    #expect(!screen.offersLunch)
     #expect(snapshot.breaks?.status == "Перерыв")
     #expect(snapshot.breaks?.canStartNow == false)
   }
@@ -364,7 +407,7 @@ struct BreakTests {
     let screen = try #require(tracker.snapshot(now: at("2026-10-27 07:51"), engine: engine).breakScreen)
     #expect(screen.earnings == nil)
     #expect(screen.prompt == "Встань и отойди от компа на 10 мин")
-    #expect(screen.skipped == "Ты скипнул уже 2 перерыва из 5")
+    #expect(screen.skipped == "Ты скипнул уже 2 перерыва из 7")
   }
 
   @Test func `in overtime the break screen says the time is free anyway`() throws {
@@ -374,6 +417,6 @@ struct BreakTests {
     run(&tracker, engine, from: "2026-10-27 14:20", to: "2026-10-27 15:10")
     let snapshot = tracker.snapshot(now: at("2026-10-27 15:11"), engine: engine)
     #expect(snapshot.breakScreen?.earnings == "Ты и так работаешь бесплатно")
-    #expect(snapshot.breaks?.tally == "скипнуто 0 из 6")
+    #expect(snapshot.breaks?.tally == "скипнуто 0 из 8")
   }
 }

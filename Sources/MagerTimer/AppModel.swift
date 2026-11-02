@@ -89,6 +89,7 @@ final class AppModel {
       case Notifier.finishAction: self?.finish()
       case Notifier.stillWorkingAction: self?.stillWorking()
       case Notifier.snoozeBreakAction: self?.snoozeBreak(minutes: 5)
+      case Notifier.startLunchAction: self?.startLunch()
       default: break
       }
     }
@@ -158,6 +159,8 @@ final class AppModel {
         category: Notifier.endOfDayCategory)
     case .overtime(let hours):
       notifier.post(title: "🔥 Переработка \(hours) ч", body: "Ты работаешь бесплатно уже \(hours) ч. Пора закругляться")
+    case .lunchTime:
+      notifier.post(title: "🍜 Время обеда", body: "Обед входит в рабочий день — до часа, можно частями", category: Notifier.lunchCategory)
     case .goalAchieved(let id, let name):
       notifier.post(title: "🎉 Цель «\(name)» достигнута", body: "Пора тратить")
       var updated = settings
@@ -199,10 +202,11 @@ final class AppModel {
     saveToday(now: now)
   }
 
-  /// Breaks a regular day brings under `settings`, for the settings form.
+  /// Breaks a regular day brings under `settings`, for the settings form: with an hour of lunch
+  /// at the reminder, as a typical day goes.
   func plannedBreaks(with settings: TimerCore.Settings) -> Int {
     let engine = Engine(settings: settings, workCalendar: workCalendar, calendar: calendar)
-    return engine.plannedBreaks(engine.plan(for: today, isShort: false))
+    return engine.plannedBreaks(engine.plan(for: today, isShort: false), assumedLunch: engine.lunchWindow(on: today))
   }
 
   func toggleHidesAmounts() {
@@ -237,6 +241,24 @@ final class AppModel {
 
   func pause() {
     tracker.pause(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func startLunch() {
+    tracker.startLunch(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func endLunch() {
+    tracker.endLunch(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func lunchFromBreak() {
+    tracker.lunchFromBreak(now: now, engine: engine)
     tick()
     saveToday(now: now)
   }

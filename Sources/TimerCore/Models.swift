@@ -99,7 +99,7 @@ extension TimeOfDay: Codable {
 
 public enum SettingsError: Error, Equatable, Sendable {
   case endNotAfterStart
-  case lunchOutsideDay
+  case lunchReminderOutsideDay
   case nonPositiveAmount
   case percentOutOfRange
   case emptyName
@@ -115,7 +115,7 @@ public enum SettingsError: Error, Equatable, Sendable {
   public var message: String {
     switch self {
     case .endNotAfterStart: "Конец рабочего дня должен быть позже начала"
-    case .lunchOutsideDay: "Обед должен целиком попадать в рабочий день"
+    case .lunchReminderOutsideDay: "Напоминание об обеде должно быть внутри рабочего дня"
     case .nonPositiveAmount: "Сумма должна быть больше нуля"
     case .percentOutOfRange: "Процент должен быть от 1 до 100"
     case .emptyName: "Название не может быть пустым"
@@ -131,29 +131,40 @@ public enum SettingsError: Error, Equatable, Sendable {
   }
 }
 
-/// Fixed daily schedule; the one-hour lunch sits inside the working day.
+/// Fixed daily schedule. Lunch sits inside the working day but is not on the schedule: the user
+/// takes it by the button; the schedule only says when to remind.
 public struct Schedule: Codable, Hashable, Sendable {
-  public static let lunchMinutes = 60
-
   public var start: TimeOfDay
   public var end: TimeOfDay
+  /// When to remind about lunch. Keeps the key of the days when lunch was fixed at this hour,
+  /// so older files read as a reminder at the same time.
   public var lunchStart: TimeOfDay
+  public var lunchReminder: Bool
 
   public init(
     start: TimeOfDay = TimeOfDay(hour: 9, minute: 0),
     end: TimeOfDay = TimeOfDay(hour: 17, minute: 0),
-    lunchStart: TimeOfDay = TimeOfDay(hour: 13, minute: 0)
+    lunchStart: TimeOfDay = TimeOfDay(hour: 13, minute: 0),
+    lunchReminder: Bool = true
   ) {
     self.start = start
     self.end = end
     self.lunchStart = lunchStart
+    self.lunchReminder = lunchReminder
   }
-
-  public var lunchEnd: TimeOfDay { TimeOfDay(minutes: lunchStart.minutes + Self.lunchMinutes) }
 
   public func validate() throws(SettingsError) {
     guard end > start else { throw .endNotAfterStart }
-    guard lunchStart >= start, lunchEnd <= end else { throw .lunchOutsideDay }
+    guard lunchStart >= start, lunchStart < end else { throw .lunchReminderOutsideDay }
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let d = Schedule()
+    start = try c.decodeIfPresent(TimeOfDay.self, forKey: .start) ?? d.start
+    end = try c.decodeIfPresent(TimeOfDay.self, forKey: .end) ?? d.end
+    lunchStart = try c.decodeIfPresent(TimeOfDay.self, forKey: .lunchStart) ?? d.lunchStart
+    lunchReminder = try c.decodeIfPresent(Bool.self, forKey: .lunchReminder) ?? d.lunchReminder
   }
 }
 
@@ -508,6 +519,20 @@ public struct Pause: Codable, Hashable, Sendable {
   }
 }
 
+/// Time the user was out for lunch; `end` is nil while lunch lasts.
+public struct Lunch: Codable, Hashable, Sendable {
+  /// All the lunch a day has, taken in one go or in parts.
+  public static let dailyLimit: TimeInterval = 60 * 60
+
+  public var start: Date
+  public var end: Date?
+
+  public init(start: Date, end: Date? = nil) {
+    self.start = start
+    self.end = end
+  }
+}
+
 /// Everything recorded about one calendar day.
 public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
   public var date: LocalDate
@@ -533,6 +558,8 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
   public var pauses: [Pause]
   /// How much of the norm was left when the day was finished early.
   public var undertimeSeconds: Double
+  /// Lunches of the day, in order; only the last can still be open.
+  public var lunches: [Lunch]
 
   public var id: LocalDate { date }
 
@@ -551,7 +578,8 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     startedAt: Date? = nil,
     manualStartOnly: Bool = false,
     pauses: [Pause] = [],
-    undertimeSeconds: Double = 0
+    undertimeSeconds: Double = 0,
+    lunches: [Lunch] = []
   ) {
     self.date = date
     self.earnedRUB = earnedRUB
@@ -568,6 +596,7 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     self.manualStartOnly = manualStartOnly
     self.pauses = pauses
     self.undertimeSeconds = undertimeSeconds
+    self.lunches = lunches
   }
 
   public init(from decoder: any Decoder) throws {
@@ -592,6 +621,7 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     manualStartOnly = try c.decodeIfPresent(Bool.self, forKey: .manualStartOnly) ?? false
     pauses = try c.decodeIfPresent([Pause].self, forKey: .pauses) ?? []
     undertimeSeconds = try c.decodeIfPresent(Double.self, forKey: .undertimeSeconds) ?? 0
+    lunches = try c.decodeIfPresent([Lunch].self, forKey: .lunches) ?? []
   }
 
   public var openPause: Pause? {
@@ -602,5 +632,29 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
   /// The pauses as intervals, an open one running up to `now`.
   public func resolvedPauses(at now: Date) -> [DateInterval] {
     pauses.map { DateInterval(start: $0.start, end: max($0.start, $0.end ?? now)) }
+  }
+
+  public var openLunch: Lunch? {
+    guard let last = lunches.last, last.end == nil else { return nil }
+    return last
+  }
+
+  /// Lunch already taken today, an open one not counted.
+  public var closedLunchTime: TimeInterval {
+    lunches.reduce(0) { total, lunch in total + (lunch.end.map { $0.timeIntervalSince(lunch.start) } ?? 0) }
+  }
+
+  /// When the open lunch ends by itself: the daily limit runs out, or the day does.
+  public func openLunchLimit(dayEnd: Date) -> Date? {
+    openLunch.map { min($0.start.addingTimeInterval(max(0, Lunch.dailyLimit - closedLunchTime)), dayEnd) }
+  }
+
+  /// The lunches as intervals; an open one runs up to `now`, but not past its limit.
+  public func resolvedLunches(at now: Date, dayEnd: Date) -> [DateInterval] {
+    let limit = openLunchLimit(dayEnd: dayEnd)
+    return lunches.map { lunch in
+      let end = lunch.end ?? min(now, limit ?? now)
+      return DateInterval(start: lunch.start, end: max(lunch.start, end))
+    }
   }
 }

@@ -21,7 +21,7 @@ struct TrackerTests {
     let engine = try makeEngine()
     var tracker = DayTracker(today: started("2026-10-27"), history: [])
     let events = run(&tracker, engine, from: "2026-10-27 08:50", to: "2026-10-27 17:10")
-    #expect(events == [.dayStarted(expectedRUB: 13_600), .dayEnded(totalRUB: 13_600)])
+    #expect(events == [.dayStarted(expectedRUB: 13_600), .lunchTime, .dayEnded(totalRUB: 13_600)])
   }
 
   @Test func `waking after the start delivers the start notification once`() throws {

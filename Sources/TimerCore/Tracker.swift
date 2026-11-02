@@ -7,6 +7,8 @@ public struct DayTracker: Sendable {
     case dayEnded(totalRUB: Double)
     case overtime(hours: Int)
     case goalAchieved(id: UUID, name: String)
+    /// The lunch reminder: lunch can be taken right now.
+    case lunchTime
   }
 
   public internal(set) var today: DayRecord
@@ -69,6 +71,10 @@ public struct DayTracker: Sendable {
       record.undertimeSeconds = max(0, plan.end.timeIntervalSince(pausedSince))
       record.overtime.finish(end: plan.end, now: pausedSince)
     }
+    // A lunch never ended ran out by itself: at the end of the hour or of the day.
+    if let open = record.openLunch {
+      record.lunches[record.lunches.count - 1].end = status.plan.flatMap { record.openLunchLimit(dayEnd: $0.end) } ?? open.start
+    }
     guard let plan = status.paidPlan else {
       record.earnedRUB = 0
       record.normHours = 0
@@ -93,11 +99,18 @@ public struct DayTracker: Sendable {
     return offs
   }
 
-  /// Today's status at `now`: an open pause runs up to it and keeps pushing the end.
+  /// Today's status at `now`: an open pause runs up to it and keeps pushing the end; an open
+  /// lunch runs up to it, but not past the hour or the end of the day.
   public func status(engine: Engine, now: Date) -> DayStatus {
-    engine.status(
+    let status = engine.status(
       on: today.date, dayOffs: dayOffs, start: today.start,
       pauses: today.resolvedPauses(at: now), pausedSince: today.openPause?.start)
+    guard case .working(var plan) = status else { return status }
+    plan.lunches = today.resolvedLunches(at: now, dayEnd: plan.end)
+    if let open = today.openLunch, let limit = today.openLunchLimit(dayEnd: plan.end), now < limit {
+      plan.lunchSince = open.start
+    }
+    return .working(plan)
   }
 
   /// Scheduled hours are on and the day has not started: activity now would start it.
@@ -124,6 +137,7 @@ public struct DayTracker: Sendable {
       let activity = now.addingTimeInterval(-idleSeconds)
       if (scheduled.start..<scheduled.end).contains(activity) { today.startedAt = activity }
     }
+    settleLunch(now: now, engine: engine)
     let status = status(engine: engine, now: now)
     guard let plan = status.paidPlan else {
       today.earnedRUB = 0
@@ -153,6 +167,13 @@ public struct DayTracker: Sendable {
     }
     if now >= plan.end, notifyOnce("end", deliver: now.timeIntervalSince(plan.end) < OvertimeState.idleLimit) {
       events.append(.dayEnded(totalRUB: today.earnedRUB))
+    }
+    // One reminder a day, at its time; if lunch cannot be taken then, it does not come later.
+    let window = engine.lunchWindow(on: today.date)
+    if engine.settings.schedule.lunchReminder, now >= window.start,
+       notifyOnce("lunch", deliver: now < window.end && canStartLunch(now: now, engine: engine))
+    {
+      events.append(.lunchTime)
     }
     let hours = Int(today.overtimeSeconds / 3600)
     if hours >= 1, !today.overtime.isClosed, notifyOnce("overtime-\(hours)", deliver: true) {
@@ -196,7 +217,8 @@ public struct DayTracker: Sendable {
     today.breaks = BreakState()
     today.pauses = []
     today.undertimeSeconds = 0
-    today.notified = today.notified.filter { $0 != "start" && $0 != "end" && !$0.hasPrefix("overtime-") }
+    today.lunches = []
+    today.notified = today.notified.filter { $0 != "start" && $0 != "end" && $0 != "lunch" && !$0.hasPrefix("overtime-") }
   }
 
   public mutating func stillWorking(now: Date, engine: Engine) {
@@ -217,9 +239,11 @@ public struct DayTracker: Sendable {
     return plan
   }
 
-  /// "Pause": money stands still, and the end moves on by as long as the pause lasts.
+  /// "Pause": money stands still, and the end moves on by as long as the pause lasts. Not at
+  /// lunch: the user is away already.
   public mutating func pause(now: Date, engine: Engine) {
-    guard runningPlan(now: now, engine: engine) != nil, today.openPause == nil else { return }
+    settleLunch(now: now, engine: engine)
+    guard runningPlan(now: now, engine: engine) != nil, today.openPause == nil, today.openLunch == nil else { return }
     today.pauses.append(Pause(start: now))
     today.breaks.activeSince = nil
   }
@@ -234,7 +258,9 @@ public struct DayTracker: Sendable {
   /// "Finish the day" before its end: paid in full, the rest of the norm left as undertime.
   /// From a pause, the day ends where the pause began; the pause stays open, so "back to work" ends it.
   public mutating func finishEarly(now: Date, engine: Engine) {
+    settleLunch(now: now, engine: engine)
     guard let plan = runningPlan(now: now, engine: engine) else { return }
+    if today.openLunch != nil { closeLunch(at: now, engine: engine) }
     let since = today.openPause?.start ?? now
     if today.openPause == nil { today.pauses.append(Pause(start: now)) }
     // The open pause pushes the end with `now`, so what is left is simply end − now.
@@ -259,6 +285,40 @@ public struct DayTracker: Sendable {
       today.overtime.reopen(at: now)
       rest(since: closedAt, now: now, engine: engine)
     }
+  }
+
+  /// "Lunch" is there while the day runs, off pause, and some of the hour is left.
+  public func canStartLunch(now: Date, engine: Engine) -> Bool {
+    guard let plan = runningPlan(now: now, engine: engine), today.openPause == nil, plan.lunchSince == nil else { return false }
+    return today.closedLunchTime < Lunch.dailyLimit
+  }
+
+  /// "Lunch": out for lunch from now. Money and the end of the day do not change.
+  public mutating func startLunch(now: Date, engine: Engine) {
+    settleLunch(now: now, engine: engine)
+    guard canStartLunch(now: now, engine: engine) else { return }
+    today.lunches.append(Lunch(start: now))
+    today.breaks.activeSince = nil
+  }
+
+  /// "Back" from lunch.
+  public mutating func endLunch(now: Date, engine: Engine) {
+    settleLunch(now: now, engine: engine)
+    guard today.openLunch != nil else { return }
+    closeLunch(at: now, engine: engine)
+  }
+
+  /// Ends an open lunch whose hour or day ran out, at that moment.
+  private mutating func settleLunch(now: Date, engine: Engine) {
+    guard today.openLunch != nil, let plan = status(engine: engine, now: now).plan,
+          let limit = today.openLunchLimit(dayEnd: plan.end), limit <= now else { return }
+    closeLunch(at: limit, engine: engine)
+  }
+
+  private mutating func closeLunch(at moment: Date, engine: Engine) {
+    guard let since = today.openLunch?.start else { return }
+    today.lunches[today.lunches.count - 1].end = max(moment, since)
+    rest(since: since, now: max(moment, since), engine: engine)
   }
 
   /// Time away at least as long as a break was a break.

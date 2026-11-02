@@ -13,7 +13,7 @@ struct SnapshotTests {
 
   @Test(arguments: [
     ("2026-10-27 08:30", "☕ 09:00", false),
-    ("2026-10-27 13:30", "🍜 7 650 ₽", false),
+    ("2026-10-27 13:30", "💰 7 650 ₽", false),
     ("2026-10-27 11:00", "💰 3 400 ₽", false),
     ("2026-11-04 12:00", "🌴", false),
   ])
@@ -41,7 +41,7 @@ struct SnapshotTests {
   @Test(arguments: [
     ("2026-10-27 08:30", "☕ •••"),
     ("2026-10-27 11:00", "💰 •••"),
-    ("2026-10-27 13:30", "🍜 •••"),
+    ("2026-10-27 13:30", "💰 •••"),
     ("2026-11-04 12:00", "🌴"),
   ])
   func `hidden amounts leave the phase icon and a mask`(moment: String, title: String) throws {
@@ -76,7 +76,7 @@ struct SnapshotTests {
   @Test func `actions depend on the phase`() throws {
     let engine = try makeEngine()
     #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 08:30", 1)]).actions == [.dayOff])
-    #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 10:00", 1)]).actions == [.pause, .finishEarly, .resetStart, .dayOff])
+    #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 10:00", 1)]).actions == [.lunch, .pause, .finishEarly, .resetStart, .dayOff])
     #expect(snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 17:01", 0)]).actions == [.stillWorking, .finish, .resetStart])
     let off = snapshot(engine, date: "2026-10-27", ticks: [("2026-10-27 10:00", 1)]) { $0.setDayOff(.unpaid) }
     #expect(off.actions == [.undoDayOff])
@@ -99,7 +99,7 @@ struct SnapshotTests {
     #expect(today.hours[0].label == "09:00–10:00")
     #expect(today.hours.map(\.startLabel) == ["09", "10", "11", "12", "13", "14", "15", "16"])
     #expect(today.hours.map(\.fraction).prefix(4) == [1, 1, 0.5, 0])
-    #expect(today.hours.map(\.isLunch) == [false, false, false, false, true, false, false, false])
+    #expect(today.hours.allSatisfy { !$0.isLunch })
     #expect(today.endLabel == "17" && today.endTime == "17:00")
     #expect(today.nowFraction == 2.5 / 8)
     #expect(today.overtimeHours == 0)

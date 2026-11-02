@@ -102,8 +102,9 @@ struct ModelsTests {
     (Schedule(start: t(9, 0), end: t(17, 0), lunchStart: t(13, 0)), nil),
     (Schedule(start: t(9, 0), end: t(9, 0), lunchStart: t(9, 0)), SettingsError.endNotAfterStart),
     (Schedule(start: t(18, 0), end: t(10, 0), lunchStart: t(13, 0)), .endNotAfterStart),
-    (Schedule(start: t(9, 0), end: t(17, 0), lunchStart: t(16, 30)), .lunchOutsideDay),
-    (Schedule(start: t(9, 0), end: t(17, 0), lunchStart: t(8, 0)), .lunchOutsideDay),
+    (Schedule(start: t(9, 0), end: t(17, 0), lunchStart: t(16, 30)), nil),
+    (Schedule(start: t(9, 0), end: t(17, 0), lunchStart: t(17, 0)), .lunchReminderOutsideDay),
+    (Schedule(start: t(9, 0), end: t(17, 0), lunchStart: t(8, 0)), .lunchReminderOutsideDay),
   ] as [(Schedule, SettingsError?)])
   func `schedule validation`(schedule: Schedule, error: SettingsError?) {
     if let error {
@@ -137,5 +138,39 @@ struct ModelsTests {
     #expect(throws: SettingsError.emptyName) { try g.validate() }
     g = base; g.initialSaved = -1
     #expect(throws: SettingsError.negativeSaved) { try g.validate() }
+  }
+
+  // MARK: - Lunch
+
+  @Test func `old day files read without lunches, and an open lunch survives a round trip`() throws {
+    let old = #"{"date":"2026-10-27","earnedRUB":0,"rateRUB":0,"normHours":8,"scheduleHours":8,"overtime":{"mode":"auto"},"overtimeSeconds":0,"notified":[]}"#
+    #expect(try JSONDecoder().decode(DayRecord.self, from: Data(old.utf8)).lunches == [])
+
+    var record = DayRecord(date: day("2026-10-27"))
+    record.lunches = [Lunch(start: at("2026-10-27 11:30"), end: at("2026-10-27 11:50")), Lunch(start: at("2026-10-27 13:00"))]
+    #expect(try JSONDecoder().decode(DayRecord.self, from: JSONEncoder().encode(record)) == record)
+  }
+
+  @Test func `an open lunch runs up to now but stops at what is left of the hour`() {
+    var record = DayRecord(date: day("2026-10-27"))
+    record.lunches = [Lunch(start: at("2026-10-27 11:30"), end: at("2026-10-27 11:50")), Lunch(start: at("2026-10-27 13:00"))]
+    let end = at("2026-10-27 15:00")
+    #expect(record.resolvedLunches(at: at("2026-10-27 13:10"), dayEnd: end).last?.end == at("2026-10-27 13:10"))
+    #expect(record.resolvedLunches(at: at("2026-10-27 13:50"), dayEnd: end).last?.end == at("2026-10-27 13:40"))
+    #expect(record.closedLunchTime == 20 * 60)
+  }
+
+  @Test func `an open lunch stops at the end of the day`() {
+    var record = DayRecord(date: day("2026-10-27"))
+    record.lunches = [Lunch(start: at("2026-10-27 14:40"))]
+    #expect(record.resolvedLunches(at: at("2026-10-27 15:10"), dayEnd: at("2026-10-27 15:00")).last?.end == at("2026-10-27 15:00"))
+  }
+
+  @Test func `old schedules keep their lunch time as the reminder, which is on`() throws {
+    let json = #"{"start":"09:00","end":"17:00","lunchStart":"12:00"}"#
+    let schedule = try JSONDecoder().decode(Schedule.self, from: Data(json.utf8))
+    #expect(schedule.lunchStart == t(12, 0) && schedule.lunchReminder)
+    let off = Schedule(lunchReminder: false)
+    #expect(try JSONDecoder().decode(Schedule.self, from: JSONEncoder().encode(off)) == off)
   }
 }

@@ -6,8 +6,6 @@ public struct DayPlan: Hashable, Sendable {
   public var isShort: Bool
   public var start: Date
   public var end: Date
-  public var lunchStart: Date
-  public var lunchEnd: Date
   /// 8, or 7 on a shortened day.
   public var normHours: Double
   /// False until the day is started; the times are then the schedule's, as a forecast.
@@ -16,6 +14,10 @@ public struct DayPlan: Hashable, Sendable {
   public var pauses: [DateInterval] = []
   /// The day is on pause since this moment.
   public var pausedSince: Date?
+  /// Lunches of the day; they change neither the money nor the end.
+  public var lunches: [DateInterval] = []
+  /// The user is out for lunch since this moment.
+  public var lunchSince: Date?
 
   /// The length of the schedule: from start to end, pauses left out.
   public var duration: TimeInterval { end.timeIntervalSince(start) - pauses.reduce(0) { $0 + $1.duration } }
@@ -173,7 +175,6 @@ public struct Engine: Sendable {
   }
 
   /// The whole day moves with its actual start and keeps its length; pauses push the end further.
-  /// Lunch stays on the clock.
   public func plan(
     for date: LocalDate, isShort: Bool, start: DayStart = .scheduled, pauses: [DateInterval] = [], pausedSince: Date? = nil
   ) -> DayPlan {
@@ -183,12 +184,15 @@ public struct Engine: Sendable {
     let paused = pauses.reduce(0) { $0 + $1.duration }
     var end = date.date(at: s.end, calendar: calendar).addingTimeInterval(begin.timeIntervalSince(scheduled) + paused)
     if isShort { end = max(begin, end.addingTimeInterval(-3600)) }
-    let clamp = { (moment: Date) in min(max(moment, begin), end) }
     return DayPlan(
       date: date, isShort: isShort, start: begin, end: end,
-      lunchStart: clamp(date.date(at: s.lunchStart, calendar: calendar)),
-      lunchEnd: clamp(date.date(at: s.lunchEnd, calendar: calendar)),
       normHours: isShort ? 7 : 8, isStarted: start != .notStarted, pauses: pauses, pausedSince: pausedSince)
+  }
+
+  /// The hour after the lunch reminder, on the clock whatever time the day started. It only
+  /// prompts lunch; time in it is lunch only when the user took it.
+  public func lunchWindow(on date: LocalDate) -> DateInterval {
+    DateInterval(start: date.date(at: settings.schedule.lunchStart, calendar: calendar), duration: Lunch.dailyLimit)
   }
 
   /// Σ incomes in RUB ÷ the month's norm hours.
@@ -215,7 +219,7 @@ public struct Engine: Sendable {
     if overtime.isClosed { return .closed }
     if plan.pausedSince != nil { return .paused }
     if now < plan.end {
-      return (plan.lunchStart..<plan.lunchEnd).contains(now) ? .lunch : .working
+      return plan.lunchSince != nil ? .lunch : .working
     }
     return .afterHours
   }

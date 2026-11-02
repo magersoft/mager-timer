@@ -102,7 +102,7 @@ struct PauseTests {
     pause(&tracker, engine, "13:10")
     #expect(phase(tracker, engine, "13:30") == .paused)
     tracker.resume(now: at("2026-10-27 13:40"), engine: engine)
-    #expect(phase(tracker, engine, "13:45") == .lunch)
+    #expect(phase(tracker, engine, "13:45") == .working)
     tracker.finishEarly(now: at("2026-10-27 17:00"), engine: engine)
     #expect(phase(tracker, engine, "17:01") == .closed)
   }
@@ -300,8 +300,8 @@ struct PauseTests {
     let engine = try engine()
     var tracker = tracker()
     pause(&tracker, engine, "10:00", "11:00")
-    // 09:50; 11:50 (12:50 is too close to lunch); 14:50, 15:50, 16:50, 17:50 (18:50 is too close to 19:00).
-    #expect(engine.plannedBreaks(try plan(tracker, engine, "11:00")) == 6)
+    // 09:50; 11:50, 12:50, 13:50, 14:50, 15:50, 16:50, 17:50 (18:50 is too close to 19:00).
+    #expect(engine.plannedBreaks(try plan(tracker, engine, "11:00")) == 8)
   }
 
   // MARK: - Snapshot

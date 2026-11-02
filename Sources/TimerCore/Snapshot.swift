@@ -11,6 +11,10 @@ public struct DaySnapshot: Hashable, Sendable {
     case undoDayOff
     case pause
     case resume
+    /// "Lunch"; `DaySnapshot.Today.lunchButton` names it.
+    case lunch
+    /// "Back" from lunch.
+    case endLunch
     /// "Finish the day" before its end; `DaySnapshot.Today.finishPrompt` asks to confirm.
     case finishEarly
     /// "Back to work" on a closed day.
@@ -57,6 +61,10 @@ public struct DaySnapshot: Hashable, Sendable {
     public var overtime: String?
     /// `на паузе 0:42 · конец в 18:42` while the day is on pause.
     public var pause: String?
+    /// `Обед · осталось 38 мин` while out for lunch.
+    public var lunch: String?
+    /// `Обед`, or `Обед (осталось 40 мин)` once part of the hour is taken.
+    public var lunchButton: String?
     /// `Недоработано 1 ч 5 мин. Закончить?` — what finishing the day now would leave.
     public var finishPrompt: String?
   }
@@ -115,6 +123,8 @@ public struct DaySnapshot: Hashable, Sendable {
     /// `Ты скипнул уже 2 перерыва из 5`
     public var skipped: String
     public var canSnooze: Bool
+    /// The break fell in the lunch hour: "Out for lunch" is offered.
+    public var offersLunch: Bool
   }
 
   public var title: String
@@ -192,7 +202,7 @@ extension DayTracker {
       }
       let hours = plan.hourSlots(rate: rate.perHourRUB, at: now).map { slot in
         let length = slot.end.timeIntervalSince(slot.start)
-        let lunch = min(slot.end, plan.lunchEnd).timeIntervalSince(max(slot.start, plan.lunchStart))
+        let lunch = plan.lunches.reduce(0) { $0 + max(0, min(slot.end, $1.end).timeIntervalSince(max(slot.start, $1.start))) }
         let paused = length - plan.activeTime(from: slot.start, to: slot.end)
         let pauses = plan.pauses.filter { (slot.start..<slot.end).contains($0.start) }
           .map { "пауза \(clock($0.start))–\(clock($0.end))" }
@@ -230,6 +240,9 @@ extension DayTracker {
         realRate: realRate,
         overtime: overtime >= 60 ? DurationFormatter.human(overtime) : nil,
         pause: plan.pausedSince.map { "на паузе \(DurationFormatter.hoursMinutes(now.timeIntervalSince($0))) · конец в \(clock(plan.end))" },
+        lunch: plan.lunchSince.map { _ in "Обед · осталось \(lunchMinutesLeft(plan: plan)) мин" },
+        lunchButton: canStartLunch(now: now, engine: engine)
+          ? (today.closedLunchTime > 0 ? "Обед (осталось \(lunchMinutesLeft(plan: plan)) мин)" : "Обед") : nil,
         // An open pause pushes the end along with now, so the norm left is end − now either way.
         finishPrompt: [.working, .lunch, .paused].contains(phase)
           ? "Недоработано \(DurationFormatter.human(plan.end.timeIntervalSince(now))). Закончить?" : nil)
@@ -275,8 +288,11 @@ extension DayTracker {
     case .beforeStart:
       if today.startedAt == nil { actions.append(.startDay) }
       actions.append(.dayOff)
-    case .working, .lunch:
+    case .working:
+      if canStartLunch(now: now, engine: engine) { actions.append(.lunch) }
       actions += [.pause, .finishEarly, .resetStart, .dayOff]
+    case .lunch:
+      actions += [.endLunch, .finishEarly, .resetStart, .dayOff]
     case .paused:
       actions += [.resume, .finishEarly, .resetStart, .dayOff]
     case .closed:
@@ -318,7 +334,8 @@ extension DayTracker {
           earnings: engine.settings.hidesAmounts ? nil
             : earned >= 1 ? "За перерыв капнет ≈ \(money(earned))" : "Ты и так работаешь бесплатно",
           skipped: Self.skippedLine(state.skipped, of: planned),
-          canSnooze: state.canSnooze)
+          canSnooze: state.canSnooze,
+          offersLunch: breakOffersLunch(now: now, engine: engine))
       }
       let running = breaksRunning(phase: phase, engine: engine)
       breaks = DaySnapshot.Breaks(
@@ -342,8 +359,7 @@ extension DayTracker {
       let minutes = Int((due.timeIntervalSince(now) / 60).rounded(.up))
       return minutes > 0 ? "Перерыв через \(minutes) мин" : "Перерыв сейчас"
     }
-    let beforeLunch = plan.lunchEnd > plan.lunchStart && due < plan.lunchStart
-    return beforeLunch ? "Следующий перерыв после обеда" : "До конца графика перерывов нет"
+    return "До конца графика перерывов нет"
   }
 
   /// Why there is no countdown right now, on a worked day.
@@ -354,10 +370,16 @@ extension DayTracker {
     }
     return switch phase {
     case .beforeStart: "Перерывы с \(clock(plan.start))"
-    case .lunch: "Обед, перерывы с \(clock(plan.lunchEnd))"
+    case .lunch: "Обед, перерывы после него"
     case .paused: "Пауза, перерывы после неё"
     default: "Перерывов больше нет"
     }
+  }
+
+  /// Minutes of the day's lunch hour still free, an open lunch counted up to now.
+  private func lunchMinutesLeft(plan: DayPlan) -> Int {
+    let taken = plan.lunches.reduce(0) { $0 + $1.duration }
+    return max(0, Int(((Lunch.dailyLimit - taken) / 60).rounded(.up)))
   }
 
   /// `Баланс: +2 ч` or `Баланс: −1 ч 30 мин`; nil when it is under a minute.

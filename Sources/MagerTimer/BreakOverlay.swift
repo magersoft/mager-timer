@@ -128,6 +128,9 @@ struct BreakView: View {
       if !screen.canSnooze {
         Text("Этот перерыв уже переносили дважды").font(.caption).foregroundStyle(.secondary)
       }
+      if screen.offersLunch {
+        Button { model.lunchFromBreak() } label: { Text("Ухожу на обед").frame(maxWidth: .infinity) }
+      }
       Button { model.skipBreak() } label: { Text("Скипнуть").frame(maxWidth: .infinity) }
     }
     .controlSize(.large)

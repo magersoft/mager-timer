@@ -52,14 +52,12 @@ struct DayStartTests {
     #expect(plan.isStarted)
   }
 
-  @Test func `lunch stays on the clock and is dropped outside the day`() throws {
+  @Test func `the lunch window stays on the clock whatever the start`() throws {
     let engine = try engine()
-    let late = engine.plan(for: day("2026-10-27"), isShort: false, start: .at(at("2026-10-27 07:30")))
-    #expect(late.lunchStart == at("2026-10-27 11:00"))
-    #expect(late.lunchEnd == at("2026-10-27 12:00"))
-    let afterLunch = engine.plan(for: day("2026-10-27"), isShort: false, start: .at(at("2026-10-27 12:30")))
-    #expect(afterLunch.end == at("2026-10-27 20:30"))
-    #expect(afterLunch.lunchStart == afterLunch.lunchEnd)
+    #expect(engine.lunchWindow(on: day("2026-10-27")) == DateInterval(start: at("2026-10-27 11:00"), end: at("2026-10-27 12:00")))
+    let late = engine.plan(for: day("2026-10-27"), isShort: false, start: .at(at("2026-10-27 12:30")))
+    #expect(late.end == at("2026-10-27 20:30"))
+    #expect(late.lunches.isEmpty)
   }
 
   @Test func `a schedule edited mid-day moves the end from the same start`() throws {

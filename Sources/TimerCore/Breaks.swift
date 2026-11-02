@@ -1,26 +1,21 @@
 import Foundation
 
 extension Engine {
-  /// No break is shown this close to lunch or to the scheduled end.
+  /// No break is shown this close to the scheduled end.
   public static let breakQuietWindow: TimeInterval = 15 * 60
 
-  /// Whether a break due at `moment` may be shown: never in lunch or in the last minutes before
-  /// lunch or the end; after the end — always.
+  /// Whether a break due at `moment` may be shown: not in the last minutes before the end;
+  /// after the end — always.
   public func breakAllowed(at moment: Date, plan: DayPlan) -> Bool {
-    if moment >= plan.end { return true }
-    let hasLunch = plan.lunchEnd > plan.lunchStart
-    if hasLunch, (plan.lunchStart..<plan.lunchEnd).contains(moment) { return false }
-    let boundary = hasLunch && moment < plan.lunchStart ? plan.lunchStart : plan.end
-    return boundary.timeIntervalSince(moment) >= Self.breakQuietWindow
+    moment >= plan.end || plan.end.timeIntervalSince(moment) >= Self.breakQuietWindow
   }
 
   /// Breaks a day brings when worked without skipping: counted from the start and from the end
-  /// of lunch and of every pause.
-  public func plannedBreaks(_ plan: DayPlan) -> Int {
+  /// of every lunch and pause. `assumedLunch` stands for a lunch not taken yet, for a forecast.
+  public func plannedBreaks(_ plan: DayPlan, assumedLunch: DateInterval? = nil) -> Int {
     let breaks = settings.breaks
     guard breaks.enabled else { return 0 }
-    var gaps = plan.pauses
-    if plan.lunchEnd > plan.lunchStart { gaps.append(DateInterval(start: plan.lunchStart, end: plan.lunchEnd)) }
+    let gaps = plan.pauses + plan.lunches + (assumedLunch.map { [$0] } ?? [])
     var segments: [(Date, Date)] = []
     var from = plan.start
     for gap in gaps.sorted(by: { $0.start < $1.start }) {
@@ -53,7 +48,7 @@ extension DayTracker {
 
   public static let breakWarningLead: TimeInterval = 60
 
-  /// Breaks run on a worked day, from the start until the day is closed, outside lunch.
+  /// Breaks run on a worked day, from the start until the day is closed, outside lunch and pauses.
   public func breaksRunning(phase: DayPhase, engine: Engine) -> Bool {
     engine.settings.breaks.enabled && engine.status(on: today.date, dayOffs: dayOffs).plan != nil
       && (phase == .working || phase == .afterHours)
@@ -96,10 +91,6 @@ extension DayTracker {
       return []
     }
     var rest = max(state.lastRestAt ?? plan.start, plan.start)
-    if now >= plan.lunchEnd, rest < plan.lunchEnd, plan.lunchEnd > plan.lunchStart {
-      rest = plan.lunchEnd
-      state.restart(at: rest)
-    }
     // Being away at least as long as a break is a break.
     if idleSeconds.map({ $0 >= settings.length }) ?? true || gap >= settings.length {
       rest = max(rest, now)
@@ -107,12 +98,18 @@ extension DayTracker {
     }
     state.lastRestAt = rest
 
-    guard phase != .lunch, let due = state.snoozedUntil ?? state.lastRestAt.map({ $0.addingTimeInterval(settings.work) }) else {
+    guard let due = state.snoozedUntil ?? state.lastRestAt.map({ $0.addingTimeInterval(settings.work) }) else {
+      state.waitingForCall = false
+      return []
+    }
+    guard phase != .lunch else {
+      // A break that falls in lunch silently does not happen.
+      if now >= due { state.restart(at: due) }
       state.waitingForCall = false
       return []
     }
     guard engine.breakAllowed(at: due, plan: plan) else {
-      // Too close to lunch or the end: this break silently does not happen.
+      // Too close to the end: this break silently does not happen.
       if now >= due { state.restart(at: due) }
       state.waitingForCall = false
       return []
@@ -148,6 +145,20 @@ extension DayTracker {
     today.breaks.activeSince = nil
     today.breaks.skipped += 1
     today.breaks.restart(at: now)
+  }
+
+  /// The break came up in the lunch hour on the clock: the user can leave for lunch from it.
+  public func breakOffersLunch(now: Date, engine: Engine) -> Bool {
+    guard let since = today.breaks.activeSince, engine.settings.schedule.lunchReminder else { return false }
+    let window = engine.lunchWindow(on: today.date)
+    return since >= window.start && since < window.end && canStartLunch(now: now, engine: engine)
+  }
+
+  /// "Out for lunch" from the break screen: the break neither counts as taken nor as skipped.
+  public mutating func lunchFromBreak(now: Date, engine: Engine) {
+    guard breakOffersLunch(now: now, engine: engine) else { return }
+    today.breaks.activeSince = nil
+    startLunch(now: now, engine: engine)
   }
 
   /// Starts a break right away.

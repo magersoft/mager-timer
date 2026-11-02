@@ -22,6 +22,9 @@ struct MenuContentView: View {
             if let pause = today.pause {
               Text("⏸ \(pause)").font(.caption.bold()).monospacedDigit()
             }
+            if let lunch = today.lunch {
+              Text("🍜 \(lunch)").font(.caption.bold()).monospacedDigit()
+            }
             if snapshot.actions.contains(.finishEarly) { dayControls(today) }
             if snapshot.actions.contains(.resumeWork) { resumeWorkPrompt }
             if snapshot.actions.contains(.finish) { afterHoursPrompt }
@@ -120,8 +123,17 @@ struct MenuContentView: View {
       .padding(10)
       .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     } else {
+      if snapshot.actions.contains(.lunch), let title = today.lunchButton {
+        Button { model.startLunch() } label: { Label(title, systemImage: "fork.knife").frame(maxWidth: .infinity) }
+          .buttonStyle(.bordered)
+          .help("Ушёл на обед: деньги идут, конец дня не сдвигается. До часа за день, можно частями")
+      }
       HStack(spacing: 8) {
-        if snapshot.actions.contains(.resume) {
+        if snapshot.actions.contains(.endLunch) {
+          Button { model.endLunch() } label: { Label("Вернулся", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity) }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        } else if snapshot.actions.contains(.resume) {
           Button { model.resume() } label: { Label("Продолжить", systemImage: "play.fill").frame(maxWidth: .infinity) }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)

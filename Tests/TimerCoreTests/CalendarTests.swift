@@ -98,7 +98,7 @@ struct CalendarTests {
   @Test(arguments: [
     ("2026-10-27 08:30", DayPhase.beforeStart),
     ("2026-10-27 09:00", .working),
-    ("2026-10-27 13:20", .lunch),
+    ("2026-10-27 13:20", .working),
     ("2026-10-27 14:00", .working),
     ("2026-10-27 17:05", .afterHours),
   ])

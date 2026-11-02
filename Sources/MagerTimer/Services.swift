@@ -117,6 +117,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
   static let stillWorkingAction = "STILL_WORKING"
   static let breakSoonCategory = "BREAK_SOON"
   static let snoozeBreakAction = "SNOOZE_BREAK_5"
+  static let lunchCategory = "LUNCH_TIME"
+  static let startLunchAction = "START_LUNCH"
 
   private(set) var isAuthorized = false
   var onAction: ((String) -> Void)?
@@ -136,6 +138,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
       UNNotificationCategory(
         identifier: Self.breakSoonCategory,
         actions: [UNNotificationAction(identifier: Self.snoozeBreakAction, title: "Перенести на 5 мин")],
+        intentIdentifiers: []),
+      UNNotificationCategory(
+        identifier: Self.lunchCategory,
+        actions: [UNNotificationAction(identifier: Self.startLunchAction, title: "Ухожу на обед")],
         intentIdentifiers: []),
     ])
     do {

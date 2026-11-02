@@ -141,7 +141,7 @@ private struct BreaksTab: View {
         }
       }
       Section {
-        Text("Экран перерыва перекрывает все мониторы. Его можно перенести на 5–15 минут, но не больше двух раз, или скипнуть — скипы считаются за день. Если ты сам отошёл от компа на время перерыва, он засчитывается. Во время созвона перерыв ждёт конца звонка. В обед, в выходные, в отпуск и после «Закончил» перерывов нет.")
+        Text("Экран перерыва перекрывает все мониторы. Его можно перенести на 5–15 минут, но не больше двух раз, или скипнуть — скипы считаются за день. Если ты сам отошёл от компа на время перерыва, он засчитывается. Во время созвона перерыв ждёт конца звонка. Обед не короче перерыва тоже засчитывается. На обеде, на паузе, в выходные, в отпуск и после «Закончил» перерывов нет.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -293,10 +293,14 @@ private struct ScheduleTab: View {
       Section("Рабочий день") {
         DatePicker("Начало", selection: $schedule.start.date, displayedComponents: .hourAndMinute)
         DatePicker("Конец", selection: $schedule.end.date, displayedComponents: .hourAndMinute)
-        DatePicker("Обед (1 час) с", selection: $schedule.lunchStart.date, displayedComponents: .hourAndMinute)
+      }
+      Section("Обед") {
+        Toggle("Напоминать об обеде", isOn: $schedule.lunchReminder)
+        DatePicker("Напоминать об обеде в", selection: $schedule.lunchStart.date, displayedComponents: .hourAndMinute)
+          .disabled(!schedule.lunchReminder)
       }
       Section {
-        Text("Обед входит в рабочий день, деньги идут и в обед. Дневная сумма (ставка × 8 ч) распределяется по графику равномерно. В предпраздничные дни конец наступает на час раньше.")
+        Text("Обед входит в рабочий день и оплачивается. Нажми «Обед», когда уходишь; можно частями, всего до часа за день. Конец дня от обеда не зависит. Дневная сумма (ставка × 8 ч) распределяется по графику равномерно. В предпраздничные дни конец наступает на час раньше.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
