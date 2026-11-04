@@ -97,4 +97,11 @@ struct EarningsTests {
     #expect(MoneyFormatter.format(rub: 8740, in: .usd, fx: nil) == nil)
     #expect(MoneyFormatter.format(rub: 8740, in: .rub, fx: nil) == "8 740 ₽")
   }
+
+  @Test func `the rate follows the own calendar`() {
+    let engine = Engine(
+      settings: Settings(incomes: [Income(name: "a", amount: 168_000, currency: .rub)], calendar: .custom),
+      workCalendar: WorkCalendar(holidays: [Holiday(name: "a", month: 4, day: 13, year: 2027)]), calendar: moscow)
+    #expect(engine.rate(year: 2027, month: 4, fx: nil).perHourRUB == 1000)  // 22 weekdays, one holiday
+  }
 }

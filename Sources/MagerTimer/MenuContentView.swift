@@ -29,8 +29,17 @@ struct MenuContentView: View {
             if snapshot.actions.contains(.resumeWork) { resumeWorkPrompt }
             if snapshot.actions.contains(.finish) { afterHoursPrompt }
           }
+        } else if let weekend = snapshot.weekend {
+          VStack(alignment: .leading, spacing: 10) {
+            WeekendSection(weekend: weekend, isAlert: snapshot.isAlert)
+            if let breaks = snapshot.breaks { breakRow(breaks) }
+            weekendControls(weekend)
+          }
         } else if let label = snapshot.nonWorkingLabel {
-          Text("🌴 \(label)").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
+          VStack(alignment: .leading, spacing: 10) {
+            Text("🌴 \(label)").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
+            if snapshot.actions.contains(.weekendWork) { weekendStart }
+          }
         }
         HStack(spacing: 8) {
           Button { model.toggleHidesAmounts() } label: {
@@ -149,6 +158,75 @@ struct MenuContentView: View {
     }
   }
 
+  /// Work on a day off starts only here, and only once the pay is chosen.
+  private var weekendStart: some View {
+    Menu {
+      ForEach(WeekendPay.allCases) { pay in
+        Button(pay.title) { model.startWeekendWork(pay) }
+      }
+    } label: {
+      Label("Поработать в выходной", systemImage: "briefcase").frame(maxWidth: .infinity)
+    }
+    .menuStyle(.button)
+    .buttonStyle(.bordered)
+    .help("Отсчёт пойдёт с момента выбора оплаты")
+  }
+
+  @ViewBuilder
+  private func weekendControls(_ weekend: DaySnapshot.Weekend) -> some View {
+    if snapshot.actions.contains(.lunch), let title = weekend.lunchButton {
+      Button { model.startLunch() } label: { Label(title, systemImage: "fork.knife").frame(maxWidth: .infinity) }
+        .buttonStyle(.bordered)
+        .help("Ушёл на обед: время оплачивается. До часа за день, можно частями")
+    }
+    HStack(spacing: 8) {
+      if snapshot.actions.contains(.endLunch) {
+        Button { model.endLunch() } label: { Label("Вернулся", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity) }
+          .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.defaultAction)
+      } else if snapshot.actions.contains(.resume) {
+        Button { model.resume() } label: { Label("Продолжить", systemImage: "play.fill").frame(maxWidth: .infinity) }
+          .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.defaultAction)
+      } else if snapshot.actions.contains(.pause) {
+        Button { model.pause() } label: { Label("Пауза", systemImage: "pause.fill").frame(maxWidth: .infinity) }
+          .buttonStyle(.bordered)
+          .help("Отойти: время на паузе не считается")
+      } else if snapshot.actions.contains(.resumeWork) {
+        Button { model.resumeWork() } label: { Label("Продолжить работу", systemImage: "play.fill").frame(maxWidth: .infinity) }
+          .buttonStyle(.bordered)
+          .help("Вернуться к работе: время до нажатия не считается")
+      }
+      if snapshot.actions.contains(.finishWeekend) {
+        Button { model.finishWeekend() } label: { Text("Закончить").frame(maxWidth: .infinity) }
+          .buttonStyle(.bordered)
+      }
+    }
+    HStack {
+      if snapshot.actions.contains(.weekendPay) {
+        Menu {
+          ForEach(WeekendPay.allCases) { pay in
+            Button { model.setWeekendPay(pay) } label: {
+              if pay == weekend.pay { Label(pay.title, systemImage: "checkmark") } else { Text(pay.title) }
+            }
+          }
+        } label: {
+          Text("Оплата: \(weekend.pay.title)")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .fixedSize()
+      }
+      Spacer()
+      if snapshot.actions.contains(.cancelWeekendWork) {
+        Button("Отменить работу в выходной") { model.cancelWeekendWork() }
+          .buttonStyle(.borderless)
+      }
+    }
+    .font(.caption)
+    .foregroundStyle(.secondary)
+  }
+
   /// A closed day can still be reopened, the same evening.
   private var resumeWorkPrompt: some View {
     Button { model.resumeWork() } label: { Label("Продолжить работу", systemImage: "play.fill").frame(maxWidth: .infinity) }
@@ -260,6 +338,29 @@ private struct TodaySection: View {
       .help("День начался по ошибке? Сбросьте начало: дальше день начнётся только кнопкой")
     } else {
       label
+    }
+  }
+}
+
+private struct WeekendSection: View {
+  let weekend: DaySnapshot.Weekend
+  let isAlert: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(weekend.title).font(.subheadline.bold())
+      HStack(alignment: .firstTextBaseline) {
+        Text(weekend.amount).font(.title2.bold()).monospacedDigit().foregroundStyle(isAlert ? .red : .primary)
+        Spacer()
+        Text(weekend.worked).foregroundStyle(.secondary).monospacedDigit()
+      }
+      Text("Ставка: \(weekend.rate)").font(.caption).monospacedDigit()
+      if let pause = weekend.pause {
+        Text("⏸ \(pause)").font(.caption.bold()).monospacedDigit()
+      }
+      if let lunch = weekend.lunch {
+        Text("🍜 \(lunch)").font(.caption.bold()).monospacedDigit()
+      }
     }
   }
 }

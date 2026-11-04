@@ -45,7 +45,7 @@ public struct DayTracker: Sendable {
     }
     var today = records.first { $0.date == todayDate } ?? DayRecord(date: todayDate)
     // Saved by a version that started the day by the schedule: it is already earning.
-    if today.startedAt == nil, today.earnedRUB > 0 {
+    if today.startedAt == nil, today.weekendWork == nil, today.earnedRUB > 0 {
       today.startedAt = todayDate.date(at: engine.settings.schedule.start, calendar: engine.calendar)
     }
     return (DayTracker(today: today, history: past), changed)
@@ -67,6 +67,10 @@ public struct DayTracker: Sendable {
     let pausedSince = record.openPause?.start
     let pauses = record.resolvedPauses(at: pausedSince ?? record.date.startOfDay(calendar: engine.calendar))
     let status = engine.status(on: record.date, dayOffs: offs, start: record.start, pauses: pauses)
+    if status == .nonWorking(.holiday), record.weekendWork != nil {
+      closeWeekend(&record, engine: engine)
+      return
+    }
     if let pausedSince, !record.overtime.isClosed, let plan = status.plan {
       record.undertimeSeconds = max(0, plan.end.timeIntervalSince(pausedSince))
       record.overtime.finish(end: plan.end, now: pausedSince)
@@ -132,6 +136,10 @@ public struct DayTracker: Sendable {
   /// `checkGoals` is off while goals are being edited, so a half-typed amount does not count as reached.
   public mutating func tick(now: Date, idleSeconds: TimeInterval?, latestFX: FXRates?, engine: Engine, checkGoals: Bool = true) -> [Event] {
     if today.fx == nil, let latestFX { today.fx = latestFX }
+    if weekendWork(engine: engine) != nil {
+      tickWeekend(now: now, idleSeconds: idleSeconds, engine: engine)
+      return goalEvents(engine: engine, now: now, checkGoals: checkGoals)
+    }
     // Forgot to press "start": the first activity within the scheduled hours starts the day.
     if let idleSeconds, awaitsStart(now: now, engine: engine), let scheduled = status(engine: engine, now: now).plan {
       let activity = now.addingTimeInterval(-idleSeconds)
@@ -179,6 +187,11 @@ public struct DayTracker: Sendable {
     if hours >= 1, !today.overtime.isClosed, notifyOnce("overtime-\(hours)", deliver: true) {
       events.append(.overtime(hours: hours))
     }
+    return events + goalEvents(engine: engine, now: now, checkGoals: checkGoals)
+  }
+
+  private mutating func goalEvents(engine: Engine, now: Date, checkGoals: Bool) -> [Event] {
+    var events: [Event] = []
     for goal in engine.settings.goals where checkGoals && goal.achievedOn == nil {
       // Keyed by the target too, so a goal raised after being reached can be reached again.
       if let progress = goalProgress(goal, engine: engine, now: now), progress.achieved,
@@ -242,6 +255,7 @@ public struct DayTracker: Sendable {
   /// "Pause": money stands still, and the end moves on by as long as the pause lasts. Not at
   /// lunch: the user is away already.
   public mutating func pause(now: Date, engine: Engine) {
+    if weekendWork(engine: engine) != nil { return pauseWeekend(now: now, engine: engine) }
     settleLunch(now: now, engine: engine)
     guard runningPlan(now: now, engine: engine) != nil, today.openPause == nil, today.openLunch == nil else { return }
     today.pauses.append(Pause(start: now))
@@ -250,6 +264,7 @@ public struct DayTracker: Sendable {
 
   /// "Resume" after a pause.
   public mutating func resume(now: Date, engine: Engine) {
+    if weekendWork(engine: engine) != nil { return resumeWeekend(now: now, engine: engine) }
     guard !today.overtime.isClosed, let since = today.openPause?.start else { return }
     today.pauses[today.pauses.count - 1].end = max(now, since)
     rest(since: since, now: now, engine: engine)
@@ -274,6 +289,7 @@ public struct DayTracker: Sendable {
   /// "Back to work" on a day closed today. Closed early, the time away was a pause and the day
   /// runs to its new end; closed after the end, a new overtime session starts.
   public mutating func resumeWork(now: Date, engine: Engine) {
+    if weekendWork(engine: engine) != nil { return resumeWeekendWork(now: now, engine: engine) }
     guard today.overtime.isClosed, let plan = status(engine: engine, now: now).plan, plan.isStarted else { return }
     if let since = today.openPause?.start {
       today.pauses[today.pauses.count - 1].end = max(now, since)
@@ -289,6 +305,10 @@ public struct DayTracker: Sendable {
 
   /// "Lunch" is there while the day runs, off pause, and some of the hour is left.
   public func canStartLunch(now: Date, engine: Engine) -> Bool {
+    if let work = weekendWork(engine: engine) {
+      guard work.state == .running, weekendLunchSince(now: now, engine: engine) == nil else { return false }
+      return today.closedLunchTime < Lunch.dailyLimit
+    }
     guard let plan = runningPlan(now: now, engine: engine), today.openPause == nil, plan.lunchSince == nil else { return false }
     return today.closedLunchTime < Lunch.dailyLimit
   }
@@ -309,20 +329,20 @@ public struct DayTracker: Sendable {
   }
 
   /// Ends an open lunch whose hour or day ran out, at that moment.
-  private mutating func settleLunch(now: Date, engine: Engine) {
-    guard today.openLunch != nil, let plan = status(engine: engine, now: now).plan,
-          let limit = today.openLunchLimit(dayEnd: plan.end), limit <= now else { return }
+  mutating func settleLunch(now: Date, engine: Engine) {
+    let dayEnd = weekendWork(engine: engine) != nil ? midnight(engine: engine) : status(engine: engine, now: now).plan?.end
+    guard today.openLunch != nil, let dayEnd, let limit = today.openLunchLimit(dayEnd: dayEnd), limit <= now else { return }
     closeLunch(at: limit, engine: engine)
   }
 
-  private mutating func closeLunch(at moment: Date, engine: Engine) {
+  mutating func closeLunch(at moment: Date, engine: Engine) {
     guard let since = today.openLunch?.start else { return }
     today.lunches[today.lunches.count - 1].end = max(moment, since)
     rest(since: since, now: max(moment, since), engine: engine)
   }
 
   /// Time away at least as long as a break was a break.
-  private mutating func rest(since: Date, now: Date, engine: Engine) {
+  mutating func rest(since: Date, now: Date, engine: Engine) {
     if now.timeIntervalSince(since) >= engine.settings.breaks.length { today.breaks.restart(at: now) }
   }
 
@@ -359,9 +379,11 @@ public struct DayTracker: Sendable {
     let expected = engine.workCalendar.days(inMonth: today.date.year, today.date.month, calendar: engine.calendar)
       .compactMap { engine.status(on: $0, dayOffs: offs).paidPlan }
       .reduce(0) { $0 + $1.dayPay(rate: rate) }
+    // Work on days off is on top of the salary, so the month can still reach 100%.
+    let weekend = records.filter { $0.weekendWork != nil && $0.normHours == 0 }.reduce(0) { $0 + $1.earnedRUB }
     return MonthSummary(
       earnedRUB: records.reduce(0) { $0 + $1.earnedRUB },
-      expectedRUB: expected,
+      expectedRUB: expected + weekend,
       overtimeSeconds: records.reduce(0) { $0 + $1.overtimeSeconds },
       undertimeSeconds: records.reduce(0) { $0 + $1.undertimeSeconds },
       giftedRUB: records.reduce(0) { $0 + $1.overtimeSeconds / 3600 * $1.rateRUB })

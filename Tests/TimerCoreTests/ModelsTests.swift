@@ -173,4 +173,25 @@ struct ModelsTests {
     let off = Schedule(lunchReminder: false)
     #expect(try JSONDecoder().decode(Schedule.self, from: JSONEncoder().encode(off)) == off)
   }
+
+  @Test func `settings without a calendar choice read as Russia without holidays`() throws {
+    let settings = try JSONDecoder().decode(Settings.self, from: Data("{}".utf8))
+    #expect(settings.calendar == .country(.ru))
+    #expect(settings.holidays.isEmpty)
+  }
+
+  @Test func `the own calendar and a yearly holiday survive a JSON round trip`() throws {
+    try roundTrip(Settings(calendar: .custom, holidays: [Holiday(name: "Благовещение", month: 3, day: 25)]))
+    try roundTrip(Settings(calendar: .country(.by), holidays: [Holiday(name: "Разовый", month: 4, day: 13, year: 2026)]))
+    let yearly = try JSONDecoder().decode(Holiday.self, from: JSONEncoder().encode(Holiday(name: "a", month: 1, day: 1)))
+    #expect(yearly.year == nil)
+  }
+
+  @Test func `a holiday needs a name and a real date`() {
+    #expect(throws: SettingsError.emptyName) { try Holiday(name: " ", month: 3, day: 25).validate() }
+    #expect(throws: SettingsError.invalidDate) { try Holiday(name: "a", month: 4, day: 31).validate() }
+    #expect(throws: SettingsError.invalidDate) { try Holiday(name: "a", month: 2, day: 29, year: 2027).validate() }
+    #expect(throws: Never.self) { try Holiday(name: "a", month: 2, day: 29).validate() }
+    #expect(throws: SettingsError.emptyName) { try Settings(holidays: [Holiday(name: "", month: 1, day: 1)]).validate() }
+  }
 }

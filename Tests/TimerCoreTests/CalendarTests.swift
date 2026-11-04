@@ -113,4 +113,43 @@ struct CalendarTests {
     let closed = OvertimeState(closedAt: at("2026-10-27 17:15"), finalOvertime: 0)
     #expect(engine.phase(at: at("2026-10-27 19:00"), status: engine.status(on: day("2026-10-27")), overtime: closed) == .closed)
   }
+
+  @Test func `a yearly own holiday is off every year and shortens the month norm`() {
+    let cal = WorkCalendar(holidays: [Holiday(name: "Благовещение", month: 3, day: 25)])
+    #expect(cal.kind(of: day("2027-03-25"), calendar: moscow) == .nonWorking)  // Thursday
+    #expect(cal.kind(of: day("2028-03-25"), calendar: moscow) == .nonWorking)
+    #expect(cal.normHours(year: 2027, month: 3, calendar: moscow) == 22 * 8)  // 23 weekdays
+  }
+
+  @Test func `a one-off own holiday is off only in its year`() {
+    let cal = WorkCalendar(holidays: [Holiday(name: "Разовый", month: 4, day: 13, year: 2026)])
+    #expect(cal.kind(of: day("2026-04-13"), calendar: moscow) == .nonWorking)
+    #expect(cal.kind(of: day("2027-04-13"), calendar: moscow) == .working)
+  }
+
+  @Test func `an own holiday on Saturday does not move to Monday`() {
+    let cal = WorkCalendar(holidays: [Holiday(name: "Первомай", month: 5, day: 1)])
+    #expect(cal.kind(of: day("2027-05-01"), calendar: moscow) == .nonWorking)
+    #expect(cal.kind(of: day("2027-05-03"), calendar: moscow) == .working)
+    #expect(cal.kind(of: day("2027-05-02"), calendar: moscow) == .nonWorking)
+  }
+
+  @Test func `the own calendar is never approximate and has no shortened days`() {
+    let engine = Engine(settings: Settings(calendar: .custom), workCalendar: WorkCalendar(holidays: []), calendar: moscow)
+    #expect(!engine.isCalendarApproximate(for: day("2031-01-01")))
+    #expect(engine.workCalendar.kind(of: day("2026-11-03"), calendar: moscow) == .working)
+    #expect(engine.workCalendar.kind(of: day("2026-11-04"), calendar: moscow) == .working)
+  }
+
+  @Test func `a list with one-off dates but none for this year is flagged`() {
+    let easter = Holiday(name: "Пасхальный понедельник", month: 4, day: 13, year: 2026)
+    let yearly = Holiday(name: "Благовещение", month: 3, day: 25)
+    let cal = WorkCalendar(holidays: [yearly, easter])
+    #expect(!cal.lacksOneOffHolidays(for: 2026))
+    #expect(cal.lacksOneOffHolidays(for: 2027))
+    // Only yearly holidays, an empty list, or a country calendar: nothing to carry over.
+    #expect(!WorkCalendar(holidays: [yearly]).lacksOneOffHolidays(for: 2027))
+    #expect(!WorkCalendar(holidays: []).lacksOneOffHolidays(for: 2027))
+    #expect(!WorkCalendar().lacksOneOffHolidays(for: 2027))
+  }
 }

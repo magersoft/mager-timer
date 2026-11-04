@@ -419,4 +419,42 @@ struct BreakTests {
     #expect(snapshot.breakScreen?.earnings == "Ты и так работаешь бесплатно")
     #expect(snapshot.breaks?.tally == "скипнуто 0 из 8")
   }
+
+  // MARK: - Weekend work
+
+  func saturday(_ engine: Engine) -> DayTracker {
+    var tracker = DayTracker(today: DayRecord(date: day("2026-10-31")), history: [])
+    tracker.startWeekendWork(pay: .double, now: at("2026-10-31 10:00"), engine: engine)
+    return tracker
+  }
+
+  @Test func `a weekend session brings breaks from its start`() throws {
+    let engine = try makeEngine()
+    var tracker = saturday(engine)
+    #expect(starts(run(&tracker, engine, from: "2026-10-31 10:00", to: "2026-10-31 10:55")) == [at("2026-10-31 10:50")])
+    #expect(tracker.breaksRunning(phase: tracker.phase(engine: engine, now: at("2026-10-31 10:55")), engine: engine))
+  }
+
+  @Test func `a day off without a session has no breaks`() throws {
+    let engine = try makeEngine()
+    var tracker = DayTracker(today: DayRecord(date: day("2026-10-31")), history: [])
+    #expect(run(&tracker, engine, from: "2026-10-31 10:00", to: "2026-10-31 14:00").isEmpty)
+    #expect(tracker.snapshot(now: at("2026-10-31 14:00"), engine: engine).breaks == nil)
+  }
+
+  @Test func `a paused weekend session has no breaks`() throws {
+    let engine = try makeEngine()
+    var tracker = saturday(engine)
+    run(&tracker, engine, from: "2026-10-31 10:00", to: "2026-10-31 10:29")
+    tracker.pause(now: at("2026-10-31 10:30"), engine: engine)
+    #expect(starts(run(&tracker, engine, from: "2026-10-31 10:30", to: "2026-10-31 11:00")).isEmpty)
+  }
+
+  @Test func `a lunch in a weekend session holds the break back`() throws {
+    let engine = try makeEngine()
+    var tracker = saturday(engine)
+    run(&tracker, engine, from: "2026-10-31 10:00", to: "2026-10-31 10:39")
+    tracker.startLunch(now: at("2026-10-31 10:40"), engine: engine)
+    #expect(starts(run(&tracker, engine, from: "2026-10-31 10:40", to: "2026-10-31 10:59")).isEmpty)
+  }
 }

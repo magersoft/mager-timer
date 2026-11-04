@@ -88,8 +88,8 @@ enum RemoteData {
     return data
   }
 
-  static func calendar(year: Int, calendar: Calendar) async throws -> String {
-    let data = try await get(URL(string: "https://isdayoff.ru/api/getdata?year=\(year)&pre=1")!)
+  static func calendar(year: Int, country: CalendarCountry, calendar: Calendar) async throws -> String {
+    let data = try await get(URL(string: "https://isdayoff.ru/api/getdata?year=\(year)&pre=1&cc=\(country.code)")!)
     return try WorkCalendar.validate(String(decoding: data, as: UTF8.self), year: year, calendar: calendar)
   }
 

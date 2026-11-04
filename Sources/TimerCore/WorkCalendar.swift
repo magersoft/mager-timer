@@ -1,7 +1,8 @@
 import Foundation
 
-/// Russian production calendar, one character per day of the year as served by isdayoff.ru:
-/// `0` working, `1` non-working, `2` shortened pre-holiday day.
+/// A production calendar. From isdayoff.ru it is one character per day of the year: `0` working,
+/// `1` non-working, `2` shortened pre-holiday day. With the user's own holidays it is Saturday and
+/// Sunday off plus those holidays, for any year, without shortened days.
 public struct WorkCalendar: Hashable, Sendable {
   public enum Kind: Sendable, Equatable {
     case working
@@ -14,8 +15,16 @@ public struct WorkCalendar: Hashable, Sendable {
   /// Raw isdayoff strings keyed by year.
   public private(set) var years: [Int: String]
 
+  /// Set for the user's own calendar; `years` is then ignored.
+  public private(set) var holidays: [Holiday]?
+
   public init(years: [Int: String] = [:]) {
     self.years = years
+  }
+
+  public init(holidays: [Holiday]) {
+    self.years = [:]
+    self.holidays = holidays
   }
 
   public static func validate(_ raw: String, year: Int, calendar: Calendar) throws(ParseError) -> String {
@@ -29,11 +38,19 @@ public struct WorkCalendar: Hashable, Sendable {
 
   public mutating func set(year: Int, raw: String) { years[year] = raw }
 
-  public func hasData(for year: Int) -> Bool { years[year] != nil }
+  public func hasData(for year: Int) -> Bool { holidays != nil || years[year] != nil }
+
+  /// The user's own list has one-off dates (movable holidays such as Easter are entered that way)
+  /// but none for this year: they were probably not carried over, and the days count as working.
+  public func lacksOneOffHolidays(for year: Int) -> Bool {
+    guard let holidays, holidays.contains(where: { $0.year != nil }) else { return false }
+    return !holidays.contains { $0.year == year }
+  }
 
   public func kind(of date: LocalDate, calendar: Calendar) -> Kind {
     let day = date.date(at: TimeOfDay(hour: 12, minute: 0), calendar: calendar)
-    if let raw = years[date.year], let index = calendar.ordinality(of: .day, in: .year, for: day) {
+    if let holidays, holidays.contains(where: { $0.matches(date) }) { return .nonWorking }
+    if holidays == nil, let raw = years[date.year], let index = calendar.ordinality(of: .day, in: .year, for: day) {
       let ch = raw[raw.index(raw.startIndex, offsetBy: index - 1)]
       switch ch {
       case "0": return .working

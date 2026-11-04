@@ -111,6 +111,7 @@ public enum SettingsError: Error, Equatable, Sendable {
   case goalsOverAllocated(percent: Int)
   case breakWorkOutOfRange
   case breakLengthOutOfRange
+  case invalidDate
 
   public var message: String {
     switch self {
@@ -127,6 +128,7 @@ public enum SettingsError: Error, Equatable, Sendable {
       "Работать подряд можно от \(BreakSettings.workRange.lowerBound) до \(BreakSettings.workRange.upperBound) мин"
     case .breakLengthOutOfRange:
       "Перерыв может длиться от \(BreakSettings.lengthRange.lowerBound) до \(BreakSettings.lengthRange.upperBound) мин"
+    case .invalidDate: "Такой даты нет"
     }
   }
 }
@@ -299,6 +301,79 @@ public struct Goal: Codable, Hashable, Sendable, Identifiable {
   }
 }
 
+/// Countries whose production calendar isdayoff.ru serves.
+public enum CalendarCountry: String, Codable, CaseIterable, Sendable, Identifiable {
+  case ru, by, kz, uz, lv
+
+  public var id: String { rawValue }
+  /// The `cc` parameter of isdayoff.ru.
+  public var code: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .ru: "Россия"
+    case .by: "Беларусь"
+    case .kz: "Казахстан"
+    case .uz: "Узбекистан"
+    case .lv: "Латвия"
+    }
+  }
+}
+
+/// Which production calendar the days follow: a country's from isdayoff.ru, or Saturday and
+/// Sunday off plus the user's own holidays. Stored as the country code or `custom`.
+public enum CalendarChoice: Hashable, Sendable, Codable {
+  case country(CalendarCountry)
+  case custom
+
+  public init(from decoder: any Decoder) throws {
+    let raw = try decoder.singleValueContainer().decode(String.self)
+    self = raw == "custom" ? .custom : .country(CalendarCountry(rawValue: raw) ?? .ru)
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var c = encoder.singleValueContainer()
+    switch self {
+    case .country(let country): try c.encode(country.rawValue)
+    case .custom: try c.encode("custom")
+    }
+  }
+
+  public var country: CalendarCountry? {
+    if case .country(let c) = self { c } else { nil }
+  }
+}
+
+/// A non-working day of the user's own calendar; `year == nil` repeats it every year.
+public struct Holiday: Codable, Hashable, Sendable, Identifiable {
+  public var id: UUID
+  public var name: String
+  public var month: Int
+  public var day: Int
+  public var year: Int?
+
+  public init(id: UUID = UUID(), name: String, month: Int, day: Int, year: Int? = nil) {
+    self.id = id
+    self.name = name
+    self.month = month
+    self.day = day
+    self.year = year
+  }
+
+  public func validate() throws(SettingsError) {
+    guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { throw .emptyName }
+    // A yearly holiday is checked against a leap year, so 29 February is allowed.
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "UTC")!
+    let components = DateComponents(year: year ?? 2024, month: month, day: day)
+    guard components.isValidDate(in: c) else { throw .invalidDate }
+  }
+
+  public func matches(_ date: LocalDate) -> Bool {
+    date.month == month && date.day == day && (year == nil || year == date.year)
+  }
+}
+
 public struct Settings: Codable, Hashable, Sendable {
   public var incomes: [Income]
   public var displayCurrency: Currency
@@ -309,6 +384,9 @@ public struct Settings: Codable, Hashable, Sendable {
   public var breaks: BreakSettings
   /// Amounts are masked wherever they show up on their own: the menu bar, the break screen, notifications.
   public var hidesAmounts: Bool
+  public var calendar: CalendarChoice
+  /// The user's own holidays; kept while another calendar is chosen, so switching back keeps them.
+  public var holidays: [Holiday]
 
   public init(
     incomes: [Income] = [],
@@ -318,7 +396,9 @@ public struct Settings: Codable, Hashable, Sendable {
     goals: [Goal] = [],
     launchAtLogin: Bool = true,
     breaks: BreakSettings = BreakSettings(),
-    hidesAmounts: Bool = false
+    hidesAmounts: Bool = false,
+    calendar: CalendarChoice = .country(.ru),
+    holidays: [Holiday] = []
   ) {
     self.incomes = incomes
     self.displayCurrency = displayCurrency
@@ -328,6 +408,8 @@ public struct Settings: Codable, Hashable, Sendable {
     self.launchAtLogin = launchAtLogin
     self.breaks = breaks
     self.hidesAmounts = hidesAmounts
+    self.calendar = calendar
+    self.holidays = holidays
   }
 
   public func validate() throws(SettingsError) {
@@ -335,6 +417,7 @@ public struct Settings: Codable, Hashable, Sendable {
     try breaks.validate()
     for income in incomes { try income.validate() }
     for goal in goals { try goal.validate() }
+    for holiday in holidays { try holiday.validate() }
     let allocated = goals.filter { $0.achievedOn == nil }.reduce(0) { $0 + $1.percent }
     guard allocated <= 100 else { throw .goalsOverAllocated(percent: allocated) }
   }
@@ -368,6 +451,8 @@ public struct Settings: Codable, Hashable, Sendable {
     launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
     breaks = try c.decodeIfPresent(BreakSettings.self, forKey: .breaks) ?? d.breaks
     hidesAmounts = try c.decodeIfPresent(Bool.self, forKey: .hidesAmounts) ?? d.hidesAmounts
+    calendar = try c.decodeIfPresent(CalendarChoice.self, forKey: .calendar) ?? d.calendar
+    holidays = try c.decodeIfPresent([Holiday].self, forKey: .holidays) ?? d.holidays
     // Shared paydays become equal shares of every income that has none of its own.
     let days = (try legacy.decodeIfPresent([Int].self, forKey: .paydays) ?? []).filter { (1...31).contains($0) }
     if !days.isEmpty {
@@ -533,6 +618,98 @@ public struct Lunch: Codable, Hashable, Sendable {
   }
 }
 
+/// How work on a day off by the calendar is paid.
+public enum WeekendPay: String, Codable, CaseIterable, Sendable, Identifiable {
+  case double
+  case single
+  /// No money: the time adds to the month's overtime.
+  case overtime
+
+  public var id: String { rawValue }
+
+  public var multiplier: Double {
+    switch self {
+    case .double: 2
+    case .single: 1
+    case .overtime: 0
+    }
+  }
+
+  public var title: String {
+    switch self {
+    case .double: "×2 ставки"
+    case .single: "Обычная ставка"
+    case .overtime: "Как переработка"
+    }
+  }
+}
+
+/// A stretch of work; `end` is nil while it lasts.
+public struct WorkSegment: Codable, Hashable, Sendable {
+  public var start: Date
+  public var end: Date?
+
+  public init(start: Date, end: Date? = nil) {
+    self.start = start
+    self.end = end
+  }
+}
+
+/// Work on a day off by the calendar, started only by the button. Pauses and "finish" close the
+/// open segment; "resume" and "back to work" open a new one. Lunch runs inside a segment.
+public struct WeekendWork: Codable, Hashable, Sendable {
+  public enum State: Hashable, Sendable {
+    case running
+    case paused(since: Date)
+    case finished
+  }
+
+  public var pay: WeekendPay
+  public var segments: [WorkSegment]
+  public var finished: Bool
+  /// The last activity at the Mac while a segment was open; a session left open closes here.
+  public var lastActivityAt: Date?
+
+  public init(pay: WeekendPay, segments: [WorkSegment], finished: Bool = false, lastActivityAt: Date? = nil) {
+    self.pay = pay
+    self.segments = segments
+    self.finished = finished
+    self.lastActivityAt = lastActivityAt
+  }
+
+  public init(pay: WeekendPay, start: Date) {
+    self.init(pay: pay, segments: [WorkSegment(start: start)], lastActivityAt: start)
+  }
+
+  public var openSegment: WorkSegment? {
+    guard let last = segments.last, last.end == nil else { return nil }
+    return last
+  }
+
+  public var state: State {
+    if openSegment != nil { return .running }
+    if finished { return .finished }
+    return .paused(since: segments.last?.end ?? .distantPast)
+  }
+
+  /// Time worked, the open segment counted up to `now`.
+  public func worked(at now: Date) -> TimeInterval {
+    segments.reduce(0) { $0 + max(0, ($1.end ?? now).timeIntervalSince($1.start)) }
+  }
+
+  mutating func close(at moment: Date) {
+    guard let open = openSegment else { return }
+    segments[segments.count - 1].end = max(moment, open.start)
+  }
+
+  mutating func open(at moment: Date) {
+    guard openSegment == nil else { return }
+    segments.append(WorkSegment(start: moment))
+    finished = false
+    lastActivityAt = moment
+  }
+}
+
 /// Everything recorded about one calendar day.
 public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
   public var date: LocalDate
@@ -560,6 +737,8 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
   public var undertimeSeconds: Double
   /// Lunches of the day, in order; only the last can still be open.
   public var lunches: [Lunch]
+  /// Work on a day off by the calendar.
+  public var weekendWork: WeekendWork?
 
   public var id: LocalDate { date }
 
@@ -579,7 +758,8 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     manualStartOnly: Bool = false,
     pauses: [Pause] = [],
     undertimeSeconds: Double = 0,
-    lunches: [Lunch] = []
+    lunches: [Lunch] = [],
+    weekendWork: WeekendWork? = nil
   ) {
     self.date = date
     self.earnedRUB = earnedRUB
@@ -597,6 +777,7 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     self.pauses = pauses
     self.undertimeSeconds = undertimeSeconds
     self.lunches = lunches
+    self.weekendWork = weekendWork
   }
 
   public init(from decoder: any Decoder) throws {
@@ -622,6 +803,7 @@ public struct DayRecord: Codable, Hashable, Sendable, Identifiable {
     pauses = try c.decodeIfPresent([Pause].self, forKey: .pauses) ?? []
     undertimeSeconds = try c.decodeIfPresent(Double.self, forKey: .undertimeSeconds) ?? 0
     lunches = try c.decodeIfPresent([Lunch].self, forKey: .lunches) ?? []
+    weekendWork = try c.decodeIfPresent(WeekendWork.self, forKey: .weekendWork)
   }
 
   public var openPause: Pause? {

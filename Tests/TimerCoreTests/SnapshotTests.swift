@@ -127,6 +127,12 @@ struct SnapshotTests {
     let engine2027 = try makeEngine()
     let approx = snapshot(engine2027, date: "2027-03-09", ticks: [("2027-03-09 10:00", 1)])
     #expect(approx.warnings == ["Календарь приблизительный: праздники не учтены"])
+
+    var cyprus = try makeEngine()
+    cyprus.settings.calendar = .custom
+    cyprus.workCalendar = WorkCalendar(holidays: [Holiday(name: "Пасхальный понедельник", month: 4, day: 13, year: 2026)])
+    let missing = snapshot(cyprus, date: "2027-03-09", ticks: [("2027-03-09 10:00", 1)])
+    #expect(missing.warnings == ["Праздники на 2027 год не внесены: Пасха и другие подвижные — в настройках"])
   }
 
   @Test func `payday line counts down to the next payday`() throws {
@@ -163,5 +169,70 @@ struct SnapshotTests {
     #expect(g.saved == "0 ₽" && g.target == "34 000 ₽")
     #expect(g.forecast == "~ 5 нояб.")
     #expect(s.nonWorkingLabel == "Выходной")
+  }
+
+  // MARK: - Weekend work
+
+  func saturday(_ pay: WeekendPay?, until time: String, configure: (inout DayTracker, Engine) -> Void = { _, _ in }) throws -> DaySnapshot {
+    let engine = try makeEngine()
+    var tracker = DayTracker(today: DayRecord(date: day("2026-10-31")), history: [])
+    if let pay { tracker.startWeekendWork(pay: pay, now: at("2026-10-31 10:00"), engine: engine) }
+    configure(&tracker, engine)
+    _ = tracker.tick(now: at("2026-10-31 \(time)"), idleSeconds: 0, latestFX: nil, engine: engine)
+    return tracker.snapshot(now: at("2026-10-31 \(time)"), engine: engine)
+  }
+
+  @Test func `a day off offers weekend work and nothing else`() throws {
+    let s = try saturday(nil, until: "11:00")
+    #expect(s.title == "🌴")
+    #expect(s.actions == [.weekendWork])
+    #expect(s.weekend == nil)
+  }
+
+  @Test func `a running weekend session shows money at the doubled rate`() throws {
+    let s = try saturday(.double, until: "11:30")
+    #expect(s.title == "💼 5 100 ₽")
+    #expect(s.weekend?.title == "Работа в выходной · ×2 ставки")
+    #expect(s.weekend?.worked == "отработано 1 ч 30 мин")
+    #expect(s.weekend?.amount == "5 100 ₽")
+    #expect(s.weekend?.rate == "3 400 ₽/ч")
+    #expect(s.weekend?.lunchButton == "Обед")
+    #expect(s.today == nil)
+    #expect(s.actions == [.lunch, .pause, .finishWeekend, .weekendPay, .cancelWeekendWork])
+  }
+
+  @Test func `lunch in a weekend session`() throws {
+    let s = try saturday(.double, until: "11:32") { tracker, engine in
+      tracker.startLunch(now: at("2026-10-31 11:30"), engine: engine)
+    }
+    #expect(s.title == "🍜 5 213 ₽")
+    #expect(s.weekend?.lunch == "Обед · осталось 58 мин")
+    #expect(s.actions == [.endLunch, .finishWeekend, .weekendPay, .cancelWeekendWork])
+  }
+
+  @Test func `a weekend session paid as overtime shows a red counter`() throws {
+    let s = try saturday(.overtime, until: "11:30")
+    #expect(s.title == "🔥 +1:30")
+    #expect(s.isAlert)
+    #expect(s.weekend?.amount == "+1:30")
+  }
+
+  @Test func `paused and finished weekend sessions`() throws {
+    let paused = try saturday(.single, until: "11:20") { tracker, engine in tracker.pause(now: at("2026-10-31 11:00"), engine: engine) }
+    #expect(paused.title == "⏸ 1 700 ₽")
+    #expect(paused.weekend?.pause == "на паузе 0:20")
+    #expect(paused.actions == [.resume, .finishWeekend, .weekendPay, .cancelWeekendWork])
+    let done = try saturday(.single, until: "12:00") { tracker, engine in tracker.finishWeekend(now: at("2026-10-31 11:00"), engine: engine) }
+    #expect(done.title == "✓ 1 700 ₽")
+    #expect(done.actions == [.resumeWork, .weekendPay, .cancelWeekendWork])
+  }
+
+  @Test func `weekend amounts hide in private mode`() throws {
+    let engine = try makeEngine()
+    var hidden = engine
+    hidden.settings.hidesAmounts = true
+    var tracker = DayTracker(today: DayRecord(date: day("2026-10-31")), history: [])
+    tracker.startWeekendWork(pay: .double, now: at("2026-10-31 10:00"), engine: hidden)
+    #expect(tracker.snapshot(now: at("2026-10-31 11:00"), engine: hidden).title == "💼 •••")
   }
 }

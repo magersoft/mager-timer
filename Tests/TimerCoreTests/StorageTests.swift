@@ -63,4 +63,20 @@ struct StorageTests {
     #expect(try current.loadSettings() == Settings())
     #expect(try legacy.loadSettings() != nil)
   }
+
+  @Test func `the calendar cached before countries existed loads as Russian`() throws {
+    let raw = try calendar2026().years[2026]!
+    try FileManager.default.createDirectory(at: storage.root, withIntermediateDirectories: true)
+    try Data(raw.utf8).write(to: storage.root.appending(path: "calendar-2026.txt"))
+    #expect(storage.loadCalendar(years: [2026], country: .ru).years == [2026: raw])
+    #expect(storage.loadCalendar(years: [2026], country: .by).years.isEmpty)
+  }
+
+  @Test func `each country keeps its own calendar file`() throws {
+    let raw = try calendar2026().years[2026]!
+    try storage.saveCalendar(year: 2026, raw: raw, country: .by)
+    #expect(FileManager.default.fileExists(atPath: storage.root.appending(path: "calendar-by-2026.txt").path(percentEncoded: false)))
+    #expect(storage.loadCalendar(years: [2026], country: .ru).years.isEmpty)
+    #expect(storage.loadCalendar(years: [2026], country: .by).years == [2026: raw])
+  }
 }

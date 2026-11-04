@@ -122,6 +122,15 @@ public enum DayPhase: Hashable, Sendable {
   /// After the scheduled end; overtime may be accruing.
   case afterHours
   case closed
+  /// Work on a day off by the calendar (`WeekendWork`).
+  case weekend(WeekendPhase)
+}
+
+public enum WeekendPhase: Hashable, Sendable {
+  case working
+  case lunch
+  case paused
+  case finished
 }
 
 /// Money arriving on one day, possibly from several incomes.
@@ -157,6 +166,8 @@ public struct Engine: Sendable {
   }
 
   public func isCalendarApproximate(for date: LocalDate) -> Bool { !workCalendar.hasData(for: date.year) }
+
+  public func lacksOneOffHolidays(for date: LocalDate) -> Bool { workCalendar.lacksOneOffHolidays(for: date.year) }
 
   /// Paid leave runs by the schedule; only a worked day follows `start` and its pauses.
   public func status(

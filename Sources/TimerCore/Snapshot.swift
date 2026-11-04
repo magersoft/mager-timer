@@ -17,8 +17,34 @@ public struct DaySnapshot: Hashable, Sendable {
     case endLunch
     /// "Finish the day" before its end; `DaySnapshot.Today.finishPrompt` asks to confirm.
     case finishEarly
-    /// "Back to work" on a closed day.
+    /// "Back to work" on a closed day, or after "finish" on a day off.
     case resumeWork
+    /// "Work on a day off", with the choice of pay (`WeekendPay`).
+    case weekendWork
+    /// "Pay": change how the weekend session is paid.
+    case weekendPay
+    case cancelWeekendWork
+    /// "Finish" the weekend session.
+    case finishWeekend
+  }
+
+  /// The day off being worked.
+  public struct Weekend: Hashable, Sendable {
+    /// `Работа в выходной · ×2 ставки`
+    public var title: String
+    public var pay: WeekendPay
+    /// `отработано 1 ч 30 мин`
+    public var worked: String
+    /// `5 100 ₽`, or `+1:30` paid as overtime.
+    public var amount: String
+    /// `3 400 ₽/ч`, the rate with its multiplier; `1 700 ₽/ч · в переработку` as overtime.
+    public var rate: String
+    /// `на паузе 0:20` while paused.
+    public var pause: String?
+    /// `Обед · осталось 38 мин` while out for lunch.
+    public var lunch: String?
+    /// `Обед`, or `Обед (осталось 40 мин)` once part of the hour is taken.
+    public var lunchButton: String?
   }
 
   public struct Hour: Hashable, Sendable {
@@ -132,6 +158,7 @@ public struct DaySnapshot: Hashable, Sendable {
   public var isAlert: Bool
   public var phase: DayPhase
   public var today: Today?
+  public var weekend: Weekend?
   public var nonWorkingLabel: String?
   public var month: Month
   /// The nearest payday, when incomes have payouts set.
@@ -152,7 +179,7 @@ extension DayTracker {
     let fx = today.fx
     let money: (Double) -> String = { MoneyFormatter.format(rub: $0, in: currency, fx: fx) ?? MoneyFormatter.format($0, .rub) }
     let status = status(engine: engine, now: now)
-    let phase = engine.phase(at: now, status: status, overtime: today.overtime)
+    let phase = phase(engine: engine, now: now)
     let rate = engine.rate(year: today.date.year, month: today.date.month, fx: fx)
 
     var warnings: [String] = []
@@ -163,6 +190,9 @@ extension DayTracker {
     if engine.isCalendarApproximate(for: today.date) {
       warnings.append("Календарь приблизительный: праздники не учтены")
     }
+    if engine.lacksOneOffHolidays(for: today.date) {
+      warnings.append("Праздники на \(today.date.year) год не внесены: Пасха и другие подвижные — в настройках")
+    }
     if fx == nil, needsFX(engine: engine) {
       warnings.append("Курс ЦБ ещё не загружен: суммы в ₽, доходы в $ и € не учтены")
     } else if let fx, fx.date < today.date, needsFX(engine: engine) {
@@ -170,6 +200,9 @@ extension DayTracker {
     }
 
     let overtime = today.overtimeSeconds
+    let work = weekendWork(engine: engine)
+    // A weekend session paid as overtime shows its time; paid in money, the money.
+    let weekendValue = work?.pay == .overtime ? "+\(DurationFormatter.hoursMinutes(overtime))" : money(today.earnedRUB)
     var title: String
     var isAlert = false
     switch phase {
@@ -184,6 +217,13 @@ extension DayTracker {
       isAlert = true
     case .afterHours: title = "⏳ \(money(today.earnedRUB))"
     case .closed: title = "✓ \(money(today.earnedRUB))"
+    case .weekend(.working) where work?.pay == .overtime:
+      title = "🔥 \(weekendValue)"
+      isAlert = true
+    case .weekend(.working): title = "💼 \(weekendValue)"
+    case .weekend(.lunch): title = "🍜 \(weekendValue)"
+    case .weekend(.paused): title = "⏸ \(weekendValue)"
+    case .weekend(.finished): title = "✓ \(weekendValue)"
     }
     // Everything after the icon is a value: money, the start time or the overtime.
     if engine.settings.hidesAmounts, let icon = title.split(separator: " ").first, icon != Substring(title) {
@@ -192,6 +232,7 @@ extension DayTracker {
     }
 
     var todaySection: DaySnapshot.Today?
+    var weekendSection: DaySnapshot.Weekend?
     var nonWorkingLabel: String?
     switch status {
     case .working(let plan):
@@ -249,6 +290,23 @@ extension DayTracker {
     case .paidLeave(let plan, let reason):
       let label = reason == .vacation ? "Отпуск" : "Оплачиваемый выходной"
       nonWorkingLabel = "\(label) · \(money(today.earnedRUB)) из \(money(plan.dayPay(rate: rate.perHourRUB)))"
+    case .nonWorking where work != nil:
+      let work = work!
+      let rateLine = work.pay == .overtime
+        ? "\(money(rate.perHourRUB))/ч · в переработку" : "\(money(rate.perHourRUB * work.pay.multiplier))/ч"
+      var pause: String?
+      if case .paused(let since) = work.state { pause = "на паузе \(DurationFormatter.hoursMinutes(now.timeIntervalSince(since)))" }
+      let lunchLeft = weekendLunchMinutesLeft(now: now, engine: engine)
+      weekendSection = DaySnapshot.Weekend(
+        title: "Работа в выходной · \(work.pay.title)",
+        pay: work.pay,
+        worked: "отработано \(DurationFormatter.human(work.worked(at: now)))",
+        amount: weekendValue,
+        rate: rateLine,
+        pause: pause,
+        lunch: phase == .weekend(.lunch) ? "Обед · осталось \(lunchLeft) мин" : nil,
+        lunchButton: canStartLunch(now: now, engine: engine)
+          ? (today.closedLunchTime > 0 ? "Обед (осталось \(lunchLeft) мин)" : "Обед") : nil)
     case .nonWorking(let reason):
       nonWorkingLabel = switch reason {
       case .holiday: "Выходной"
@@ -299,6 +357,17 @@ extension DayTracker {
       actions.append(.resumeWork)
     case .nonWorking(.unpaidDayOff), .paidLeave(.paidDayOff):
       actions.append(.undoDayOff)
+    case .nonWorking(.holiday):
+      if canStartWeekendWork(engine: engine) { actions.append(.weekendWork) }
+    case .weekend(.working):
+      if canStartLunch(now: now, engine: engine) { actions.append(.lunch) }
+      actions += [.pause, .finishWeekend, .weekendPay, .cancelWeekendWork]
+    case .weekend(.lunch):
+      actions += [.endLunch, .finishWeekend, .weekendPay, .cancelWeekendWork]
+    case .weekend(.paused):
+      actions += [.resume, .finishWeekend, .weekendPay, .cancelWeekendWork]
+    case .weekend(.finished):
+      actions += [.resumeWork, .weekendPay, .cancelWeekendWork]
     case .nonWorking, .paidLeave:
       break
     }
@@ -319,14 +388,17 @@ extension DayTracker {
 
     var breaks: DaySnapshot.Breaks?
     var breakScreen: DaySnapshot.BreakScreen?
-    if let plan = status.plan, engine.settings.breaks.enabled {
+    if let plan = breakPlan(now: now, engine: engine), engine.settings.breaks.enabled {
       let state = today.breaks
       let settings = engine.settings.breaks
-      let planned = engine.plannedBreaks(plan) + state.overtimeBreaks
+      // A weekend session has no schedule to plan breaks by: it counts the ones that came.
+      let planned = work != nil ? state.taken + state.skipped + (state.isActive ? 1 : 0)
+        : engine.plannedBreaks(plan) + state.overtimeBreaks
       if let since = state.activeSince {
         let end = since.addingTimeInterval(settings.length)
         let left = max(0, end.timeIntervalSince(now))
-        let earned = plan.earned(rate: rate.perHourRUB, at: end) - plan.earned(rate: rate.perHourRUB, at: since)
+        let earned = work.map { settings.length / 3600 * rate.perHourRUB * $0.pay.multiplier }
+          ?? plan.earned(rate: rate.perHourRUB, at: end) - plan.earned(rate: rate.perHourRUB, at: since)
         breakScreen = DaySnapshot.BreakScreen(
           remaining: String(format: "%02d:%02d", Int(left.rounded(.up)) / 60, Int(left.rounded(.up)) % 60),
           fraction: 1 - left / settings.length,
@@ -345,7 +417,7 @@ extension DayTracker {
     }
 
     return DaySnapshot(
-      title: title, isAlert: isAlert, phase: phase, today: todaySection, nonWorkingLabel: nonWorkingLabel,
+      title: title, isAlert: isAlert, phase: phase, today: todaySection, weekend: weekendSection, nonWorkingLabel: nonWorkingLabel,
       month: month, payday: payday, goals: goals, canAddGoal: engine.settings.goals.isEmpty, warnings: warnings, actions: actions,
       breaks: breaks, breakScreen: breakScreen)
   }
@@ -371,9 +443,15 @@ extension DayTracker {
     return switch phase {
     case .beforeStart: "Перерывы с \(clock(plan.start))"
     case .lunch: "Обед, перерывы после него"
-    case .paused: "Пауза, перерывы после неё"
+    case .paused, .weekend(.paused): "Пауза, перерывы после неё"
+    case .weekend(.lunch): "Обед, перерывы после него"
     default: "Перерывов больше нет"
     }
+  }
+
+  private func weekendLunchMinutesLeft(now: Date, engine: Engine) -> Int {
+    let taken = today.resolvedLunches(at: now, dayEnd: midnight(engine: engine)).reduce(0) { $0 + $1.duration }
+    return max(0, Int(((Lunch.dailyLimit - taken) / 60).rounded(.up)))
   }
 
   /// Minutes of the day's lunch hour still free, an open lunch counted up to now.

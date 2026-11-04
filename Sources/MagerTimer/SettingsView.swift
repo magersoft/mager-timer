@@ -2,7 +2,7 @@ import TimerCore
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-  case incomes, schedule, vacations, goal, breaks, general
+  case incomes, schedule, calendar, vacations, goal, breaks, general
   static let storageKey = "settingsTab"
 
   var id: Self { self }
@@ -11,6 +11,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     switch self {
     case .incomes: "Доходы"
     case .schedule: "График"
+    case .calendar: "Календарь"
     case .vacations: "Отпуска"
     case .goal: "Цели"
     case .breaks: "Перерывы"
@@ -22,6 +23,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     switch self {
     case .incomes: "banknote"
     case .schedule: "clock"
+    case .calendar: "calendar"
     case .vacations: "beach.umbrella"
     case .goal: "target"
     case .breaks: "cup.and.saucer"
@@ -78,6 +80,7 @@ struct SettingsView: View {
     switch tab {
     case .incomes: IncomesTab(settings: $draft, fx: model.fx)
     case .schedule: ScheduleTab(schedule: $draft.schedule)
+    case .calendar: CalendarTab(settings: $draft, today: model.today)
     case .vacations: VacationsTab(vacations: $draft.vacations, today: model.today)
     case .goal: GoalsTab(goals: $draft.goals, today: model.today)
     case .breaks: BreaksTab(breaks: $draft.breaks, planned: model.plannedBreaks(with: draft))
@@ -141,7 +144,7 @@ private struct BreaksTab: View {
         }
       }
       Section {
-        Text("Экран перерыва перекрывает все мониторы. Его можно перенести на 5–15 минут, но не больше двух раз, или скипнуть — скипы считаются за день. Если ты сам отошёл от компа на время перерыва, он засчитывается. Во время созвона перерыв ждёт конца звонка. Обед не короче перерыва тоже засчитывается. На обеде, на паузе, в выходные, в отпуск и после «Закончил» перерывов нет.")
+        Text("Экран перерыва перекрывает все мониторы. Его можно перенести на 5–15 минут, но не больше двух раз, или скипнуть — скипы считаются за день. Если ты сам отошёл от компа на время перерыва, он засчитывается. Во время созвона перерыв ждёт конца звонка. Обед не короче перерыва тоже засчитывается. На обеде, на паузе, в отпуск и после «Закончил» перерывов нет; в выходные — только пока идёт работа в выходной.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -305,6 +308,87 @@ private struct ScheduleTab: View {
       }
     }
     .formStyle(.grouped)
+  }
+}
+
+private struct CalendarTab: View {
+  @Binding var settings: TimerCore.Settings
+  let today: LocalDate
+
+  var body: some View {
+    Form {
+      Section {
+        Picker("Страна", selection: $settings.calendar) {
+          ForEach(CalendarCountry.allCases) { Text($0.title).tag(CalendarChoice.country($0)) }
+          Text("Другая страна — свои праздники").tag(CalendarChoice.custom)
+        }
+        Text(settings.calendar == .custom
+          ? "Выходные — суббота и воскресенье, праздники — из списка ниже. Сокращённых дней и переносов нет, сеть не нужна."
+          : "Праздники, переносы и сокращённые дни загружаются с isdayoff.ru.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if settings.calendar == .custom {
+        Section("Праздники") {
+          if settings.holidays.isEmpty {
+            Text("Праздников нет").foregroundStyle(.secondary)
+          }
+          ForEach(settings.holidays) { element in
+            HolidayRow(holiday: binding($settings.holidays, for: element), today: today) {
+              settings.holidays.removeAll { $0.id == element.id }
+            }
+          }
+          Button("Добавить праздник") {
+            settings.holidays.append(Holiday(name: "Праздник", month: today.month, day: today.day))
+          }
+          Text("«Каждый год» повторяет праздник в тот же день. Подвижные праздники (Пасха, Троица и связанные с ними) вноси разовыми датами на каждый год — если на текущий год разовых дат нет, меню напомнит.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      Section {
+        Text("Действует с сегодняшнего дня: уже прошедшие дни не пересчитываются.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+}
+
+private struct HolidayRow: View {
+  @Binding var holiday: Holiday
+  let today: LocalDate
+  let remove: () -> Void
+
+  var body: some View {
+    HStack {
+      TextField("Название", text: $holiday.name)
+      DatePicker("Дата", selection: date, displayedComponents: .date).labelsHidden()
+      Toggle("Каждый год", isOn: yearly)
+      Button(role: .destructive, action: remove) { Image(systemName: "minus.circle") }
+        .buttonStyle(.borderless)
+        .help("Удалить праздник")
+    }
+  }
+
+  /// A yearly holiday is shown in the current year; picking a date keeps it yearly.
+  private var date: Binding<Date> {
+    Binding(
+      get: {
+        let year = holiday.year ?? today.year
+        // 29 February of a yearly holiday shows in a leap year.
+        let valid = DateComponents(year: year, month: holiday.month, day: holiday.day).isValidDate(in: .current)
+        return LocalDate(year: valid ? year : 2028, month: holiday.month, day: holiday.day)
+          .date(at: TimeOfDay(hour: 12, minute: 0), calendar: .current)
+      },
+      set: {
+        let picked = LocalDate($0, calendar: .current)
+        holiday.month = picked.month
+        holiday.day = picked.day
+        if holiday.year != nil { holiday.year = picked.year }
+      })
+  }
+
+  private var yearly: Binding<Bool> {
+    Binding(get: { holiday.year == nil }, set: { holiday.year = $0 ? nil : today.year })
   }
 }
 

@@ -54,7 +54,7 @@ final class AppModel {
     let loaded = (try? storage.loadSettings()) ?? nil
     let settings = loaded ?? Settings()
     self.settings = settings
-    workCalendar = storage.loadCalendar(years: [year - 1, year, year + 1])
+    workCalendar = Self.loadWorkCalendar(settings, storage: storage, around: year)
     latestFX = storage.loadLatestFX()
     let engine = Engine(settings: settings, workCalendar: workCalendar, calendar: calendar)
     let records = (try? storage.loadAllRecords()) ?? []
@@ -78,6 +78,14 @@ final class AppModel {
   }
 
   var now: Date { Date().addingTimeInterval(clockOffset) }
+
+  /// The chosen calendar: a country's from the cache, or the user's own holidays.
+  private static func loadWorkCalendar(_ settings: Settings, storage: Storage, around year: Int) -> WorkCalendar {
+    switch settings.calendar {
+    case .country(let country): storage.loadCalendar(years: [year - 1, year, year + 1], country: country)
+    case .custom: WorkCalendar(holidays: settings.holidays)
+    }
+  }
 
   private var engine: Engine { Engine(settings: settings, workCalendar: workCalendar, calendar: calendar) }
 
@@ -120,14 +128,17 @@ final class AppModel {
     let now = now
     let engine = engine
     save(tracker.rollOver(now: now, latestFX: latestFX, engine: engine))
-    let phase = engine.phase(at: now, status: tracker.status(engine: engine, now: now), overtime: tracker.today.overtime)
+    let phase = tracker.phase(engine: engine, now: now)
     let breaksRunning = tracker.breaksRunning(phase: phase, engine: engine)
     let awaitsStart = tracker.awaitsStart(now: now, engine: engine)
+    // A weekend session left open closes at midnight by the last activity.
+    let weekendRunning = phase == .weekend(.working) || phase == .weekend(.lunch)
     // Activity matters for starting a forgotten day, for overtime once the day is over,
-    // and for breaks while they run.
-    let idle: TimeInterval? = phase == .afterHours || breaksRunning || awaitsStart ? activity.idleSeconds() : 0
+    // for a weekend session and for breaks while they run.
+    let tracked = phase == .afterHours || awaitsStart || weekendRunning
+    let idle: TimeInterval? = tracked || breaksRunning ? activity.idleSeconds() : 0
     let events = tracker.tick(
-      now: now, idleSeconds: phase == .afterHours || awaitsStart ? idle : 0, latestFX: latestFX, engine: engine,
+      now: now, idleSeconds: tracked ? idle : 0, latestFX: latestFX, engine: engine,
       checkGoals: Date().timeIntervalSince(lastGoalEdit) > 30)
     for event in events { deliver(event) }
     let inCall = breaksRunning && CallDetector.isInCall()
@@ -281,6 +292,30 @@ final class AppModel {
     saveToday(now: now)
   }
 
+  func startWeekendWork(_ pay: WeekendPay) {
+    tracker.startWeekendWork(pay: pay, now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func setWeekendPay(_ pay: WeekendPay) {
+    tracker.setWeekendPay(pay, now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func finishWeekend() {
+    tracker.finishWeekend(now: now, engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
+  func cancelWeekendWork() {
+    tracker.cancelWeekendWork(engine: engine)
+    tick()
+    saveToday(now: now)
+  }
+
   func setDayOff(_ dayOff: DayOff?) {
     tracker.setDayOff(dayOff)
     tick()
@@ -305,6 +340,7 @@ final class AppModel {
       return error
     }
     let launchChanged = new.launchAtLogin != settings.launchAtLogin
+    let calendarChanged = new.calendar != settings.calendar || new.holidays != settings.holidays
     if new.goals.map({ ($0.id, $0.amount, $0.currency, $0.percent, $0.initialSaved) }).elementsEqual(
       settings.goals.map({ ($0.id, $0.amount, $0.currency, $0.percent, $0.initialSaved) }), by: ==) == false {
       lastGoalEdit = Date()
@@ -312,6 +348,11 @@ final class AppModel {
     settings = new
     persist(new)
     if launchChanged { LoginItem.apply(new.launchAtLogin) }
+    // Past days keep what they were counted by; the new calendar applies from today.
+    if calendarChanged {
+      workCalendar = Self.loadWorkCalendar(new, storage: storage, around: calendar.component(.year, from: now))
+      if new.calendar.country != nil { Task { _ = await fetchCalendars(); tick() } }
+    }
     tick()
     return nil
   }
@@ -338,21 +379,29 @@ final class AppModel {
     lastSavedPhase = snapshot.phase
   }
 
-  private func refreshRemoteData() async -> Bool {
+  /// Fetches missing years of the chosen country's calendar; the own calendar needs no network.
+  private func fetchCalendars() async -> Bool {
+    guard let country = settings.calendar.country else { return true }
     var ok = true
     let year = calendar.component(.year, from: now)
     var years = [year]
     if calendar.component(.month, from: now) == 12 { years.append(year + 1) }
     for y in years where !workCalendar.hasData(for: y) {
       do {
-        let raw = try await RemoteData.calendar(year: y, calendar: calendar)
-        workCalendar.set(year: y, raw: raw)
-        try storage.saveCalendar(year: y, raw: raw)
+        let raw = try await RemoteData.calendar(year: y, country: country, calendar: calendar)
+        try storage.saveCalendar(year: y, raw: raw, country: country)
+        // The country may have changed while the request was out.
+        if settings.calendar == .country(country) { workCalendar.set(year: y, raw: raw) }
       } catch {
         ok = false
-        log.error("Calendar \(y) fetch failed: \(error.localizedDescription, privacy: .public)")
+        log.error("Calendar \(country.code) \(y) fetch failed: \(error.localizedDescription, privacy: .public)")
       }
     }
+    return ok
+  }
+
+  private func refreshRemoteData() async -> Bool {
+    var ok = await fetchCalendars()
     do {
       let fx = try await RemoteData.exchangeRates()
       latestFX = fx

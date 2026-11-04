@@ -48,15 +48,22 @@ extension DayTracker {
 
   public static let breakWarningLead: TimeInterval = 60
 
-  /// Breaks run on a worked day, from the start until the day is closed, outside lunch and pauses.
+  /// Breaks run on a worked day, from the start until the day is closed, outside lunch and
+  /// pauses; on a day off, while a weekend session runs.
   public func breaksRunning(phase: DayPhase, engine: Engine) -> Bool {
-    engine.settings.breaks.enabled && engine.status(on: today.date, dayOffs: dayOffs).plan != nil
-      && (phase == .working || phase == .afterHours)
+    guard engine.settings.breaks.enabled else { return false }
+    if phase == .weekend(.working) { return true }
+    return engine.status(on: today.date, dayOffs: dayOffs).plan != nil && (phase == .working || phase == .afterHours)
+  }
+
+  /// What the break countdown runs on: the worked day's plan, or a weekend session.
+  public func breakPlan(now: Date, engine: Engine) -> DayPlan? {
+    status(engine: engine, now: now).plan ?? weekendBreakPlan(now: now, engine: engine)
   }
 
   /// When the next break is due, before the lunch and end-of-day rules apply.
   public func breakDue(now: Date, engine: Engine) -> Date? {
-    guard let plan = status(engine: engine, now: now).plan else { return nil }
+    guard let plan = breakPlan(now: now, engine: engine) else { return nil }
     let state = today.breaks
     return state.snoozedUntil ?? max(state.lastRestAt ?? plan.start, plan.start).addingTimeInterval(engine.settings.breaks.work)
   }
@@ -70,7 +77,7 @@ extension DayTracker {
     let gap = state.lastTick.map { now.timeIntervalSince($0) } ?? 0
     state.lastTick = now
 
-    guard settings.enabled, let plan = status(engine: engine, now: now).plan else {
+    guard settings.enabled, let plan = breakPlan(now: now, engine: engine) else {
       state.waitingForCall = false
       guard state.isActive else { return [] }
       state.activeSince = nil
@@ -163,9 +170,8 @@ extension DayTracker {
 
   /// Starts a break right away.
   public mutating func startBreakNow(now: Date, engine: Engine) {
-    let status = status(engine: engine, now: now)
-    guard !today.breaks.isActive, status.plan?.isStarted == true else { return }
-    let phase = engine.phase(at: now, status: status, overtime: today.overtime)
+    guard !today.breaks.isActive, let plan = breakPlan(now: now, engine: engine), plan.isStarted else { return }
+    let phase = engine.phase(at: now, status: .working(plan), overtime: today.overtime)
     today.breaks.start(at: now, overtime: phase == .afterHours)
   }
 }

@@ -29,7 +29,11 @@ public struct Storage: Sendable {
   private var historyDir: URL { root.appending(path: "history", directoryHint: .isDirectory) }
   private var settingsURL: URL { root.appending(path: "settings.json") }
   private var fxURL: URL { root.appending(path: "fx-latest.json") }
-  private func calendarURL(_ year: Int) -> URL { root.appending(path: "calendar-\(year).txt") }
+  private func calendarURL(_ year: Int, _ country: CalendarCountry) -> URL {
+    root.appending(path: "calendar-\(country.code)-\(year).txt")
+  }
+  /// The Russian calendar as cached before the country could be chosen; read, never removed.
+  private func legacyCalendarURL(_ year: Int) -> URL { root.appending(path: "calendar-\(year).txt") }
   private func monthURL(_ year: Int, _ month: Int) -> URL {
     historyDir.appending(path: String(format: "%04d-%02d.json", year, month))
   }
@@ -85,15 +89,19 @@ public struct Storage: Sendable {
 
   // MARK: Caches
 
-  public func loadCalendar(years: [Int]) -> WorkCalendar {
+  public func loadCalendar(years: [Int], country: CalendarCountry = .ru) -> WorkCalendar {
     var calendar = WorkCalendar()
     for year in years {
-      if let raw = try? String(contentsOf: calendarURL(year), encoding: .utf8) { calendar.set(year: year, raw: raw) }
+      let raw = (try? String(contentsOf: calendarURL(year, country), encoding: .utf8))
+        ?? (country == .ru ? try? String(contentsOf: legacyCalendarURL(year), encoding: .utf8) : nil)
+      if let raw { calendar.set(year: year, raw: raw) }
     }
     return calendar
   }
 
-  public func saveCalendar(year: Int, raw: String) throws { try write(Data(raw.utf8), to: calendarURL(year)) }
+  public func saveCalendar(year: Int, raw: String, country: CalendarCountry = .ru) throws {
+    try write(Data(raw.utf8), to: calendarURL(year, country))
+  }
 
   public func loadLatestFX() -> FXRates? { try? read(FXRates.self, from: fxURL) }
 
